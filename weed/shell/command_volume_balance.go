@@ -108,7 +108,7 @@ func (c *commandVolumeBalance) Do(args []string, commandEnv *CommandEnv, writer 
 	return nil
 }
 
-func balanceVolumeServers(commandEnv *CommandEnv, diskTypes []types.DiskType, volumeReplicas map[uint32][]*VolumeReplica, nodes []*Node, volumeSizeLimit uint64, collection string, applyBalancing bool) error {
+func balanceVolumeServers(commandEnv *CommandEnv, diskTypes []types.DiskType, volumeReplicas map[VolumeKey][]*VolumeReplica, nodes []*Node, volumeSizeLimit uint64, collection string, applyBalancing bool) error {
 
 	for _, diskType := range diskTypes {
 		if err := balanceVolumeServersByDiskType(commandEnv, diskType, volumeReplicas, nodes, volumeSizeLimit, collection, applyBalancing); err != nil {
@@ -119,7 +119,7 @@ func balanceVolumeServers(commandEnv *CommandEnv, diskTypes []types.DiskType, vo
 
 }
 
-func balanceVolumeServersByDiskType(commandEnv *CommandEnv, diskType types.DiskType, volumeReplicas map[uint32][]*VolumeReplica, nodes []*Node, volumeSizeLimit uint64, collection string, applyBalancing bool) error {
+func balanceVolumeServersByDiskType(commandEnv *CommandEnv, diskType types.DiskType, volumeReplicas map[VolumeKey][]*VolumeReplica, nodes []*Node, volumeSizeLimit uint64, collection string, applyBalancing bool) error {
 
 	for _, n := range nodes {
 		n.selectVolumes(func(v *master_pb.VolumeInformationMessage) bool {
@@ -235,7 +235,7 @@ func sortReadOnlyVolumes(volumes []*master_pb.VolumeInformationMessage) {
 	})
 }
 
-func balanceSelectedVolume(commandEnv *CommandEnv, diskType types.DiskType, volumeReplicas map[uint32][]*VolumeReplica, nodes []*Node, capacityFunc CapacityFunc, sortCandidatesFn func(volumes []*master_pb.VolumeInformationMessage), applyBalancing bool) (err error) {
+func balanceSelectedVolume(commandEnv *CommandEnv, diskType types.DiskType, volumeReplicas map[VolumeKey][]*VolumeReplica, nodes []*Node, capacityFunc CapacityFunc, sortCandidatesFn func(volumes []*master_pb.VolumeInformationMessage), applyBalancing bool) (err error) {
 	selectedVolumeCount, volumeMaxCount := 0, 0
 	var nodesWithCapacity []*Node
 	for _, dn := range nodes {
@@ -285,7 +285,7 @@ func balanceSelectedVolume(commandEnv *CommandEnv, diskType types.DiskType, volu
 	return nil
 }
 
-func attemptToMoveOneVolume(commandEnv *CommandEnv, volumeReplicas map[uint32][]*VolumeReplica, fullNode *Node, candidateVolumes []*master_pb.VolumeInformationMessage, emptyNode *Node, applyBalancing bool) (hasMoved bool, err error) {
+func attemptToMoveOneVolume(commandEnv *CommandEnv, volumeReplicas map[VolumeKey][]*VolumeReplica, fullNode *Node, candidateVolumes []*master_pb.VolumeInformationMessage, emptyNode *Node, applyBalancing bool) (hasMoved bool, err error) {
 
 	for _, v := range candidateVolumes {
 		hasMoved, err = maybeMoveOneVolume(commandEnv, volumeReplicas, fullNode, v, emptyNode, applyBalancing)
@@ -299,7 +299,7 @@ func attemptToMoveOneVolume(commandEnv *CommandEnv, volumeReplicas map[uint32][]
 	return
 }
 
-func maybeMoveOneVolume(commandEnv *CommandEnv, volumeReplicas map[uint32][]*VolumeReplica, fullNode *Node, candidateVolume *master_pb.VolumeInformationMessage, emptyNode *Node, applyChange bool) (hasMoved bool, err error) {
+func maybeMoveOneVolume(commandEnv *CommandEnv, volumeReplicas map[VolumeKey][]*VolumeReplica, fullNode *Node, candidateVolume *master_pb.VolumeInformationMessage, emptyNode *Node, applyChange bool) (hasMoved bool, err error) {
 
 	if candidateVolume.ReplicaPlacement > 0 {
 		replicaPlacement, _ := super_block.NewReplicaPlacementFromByte(byte(candidateVolume.ReplicaPlacement))

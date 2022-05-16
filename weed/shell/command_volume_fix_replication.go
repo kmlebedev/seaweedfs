@@ -19,6 +19,11 @@ import (
 	"github.com/chrislusf/seaweedfs/weed/storage/super_block"
 )
 
+type VolumeKey struct {
+	Id         uint32
+	Collection string
+}
+
 func init() {
 	Commands = append(Commands, &commandVolumeFixReplication{})
 }
@@ -89,17 +94,17 @@ func (c *commandVolumeFixReplication) Do(args []string, commandEnv *CommandEnv, 
 		}
 
 		// find all under replicated volumes
-		var underReplicatedVolumeIds, overReplicatedVolumeIds, misplacedVolumeIds []uint32
-		for vid, replicas := range volumeReplicas {
+		var underReplicatedVolumeIds, overReplicatedVolumeIds, misplacedVolumeIds []VolumeKey
+		for vkey, replicas := range volumeReplicas {
 			replica := replicas[0]
 			replicaPlacement, _ := super_block.NewReplicaPlacementFromByte(byte(replica.info.ReplicaPlacement))
 			if replicaPlacement.GetCopyCount() > len(replicas) {
-				underReplicatedVolumeIds = append(underReplicatedVolumeIds, vid)
+				underReplicatedVolumeIds = append(underReplicatedVolumeIds, vkey)
 			} else if replicaPlacement.GetCopyCount() < len(replicas) {
-				overReplicatedVolumeIds = append(overReplicatedVolumeIds, vid)
+				overReplicatedVolumeIds = append(overReplicatedVolumeIds, vkey)
 				fmt.Fprintf(writer, "volume %d replication %s, but over replicated %+d\n", replica.info.Id, replicaPlacement, len(replicas))
 			} else if isMisplaced(replicas, replicaPlacement) {
-				misplacedVolumeIds = append(misplacedVolumeIds, vid)
+				misplacedVolumeIds = append(misplacedVolumeIds, vkey)
 				fmt.Fprintf(writer, "volume %d replication %s is not well placed %+v\n", replica.info.Id, replicaPlacement, replicas)
 			}
 		}
@@ -162,14 +167,15 @@ func (c *commandVolumeFixReplication) Do(args []string, commandEnv *CommandEnv, 
 	return nil
 }
 
-func collectVolumeReplicaLocations(topologyInfo *master_pb.TopologyInfo) (map[uint32][]*VolumeReplica, []location) {
-	volumeReplicas := make(map[uint32][]*VolumeReplica)
+func collectVolumeReplicaLocations(topologyInfo *master_pb.TopologyInfo) (map[VolumeKey][]*VolumeReplica, []location) {
+	volumeReplicas := make(map[VolumeKey][]*VolumeReplica)
 	var allLocations []location
 	eachDataNode(topologyInfo, func(dc string, rack RackId, dn *master_pb.DataNodeInfo) {
 		loc := newLocation(dc, string(rack), dn)
 		for _, diskInfo := range dn.DiskInfos {
 			for _, v := range diskInfo.VolumeInfos {
-				volumeReplicas[v.Id] = append(volumeReplicas[v.Id], &VolumeReplica{
+				key := VolumeKey{v.Id, v.Collection}
+				volumeReplicas[key] = append(volumeReplicas[key], &VolumeReplica{
 					location: &loc,
 					info:     v,
 				})
@@ -182,7 +188,7 @@ func collectVolumeReplicaLocations(topologyInfo *master_pb.TopologyInfo) (map[ui
 
 type SelectOneVolumeFunc func(replicas []*VolumeReplica, replicaPlacement *super_block.ReplicaPlacement) *VolumeReplica
 
-func (c *commandVolumeFixReplication) deleteOneVolume(commandEnv *CommandEnv, writer io.Writer, takeAction bool, overReplicatedVolumeIds []uint32, volumeReplicas map[uint32][]*VolumeReplica, allLocations []location, selectOneVolumeFn SelectOneVolumeFunc) error {
+func (c *commandVolumeFixReplication) deleteOneVolume(commandEnv *CommandEnv, writer io.Writer, takeAction bool, overReplicatedVolumeIds []VolumeKey, volumeReplicas map[VolumeKey][]*VolumeReplica, allLocations []location, selectOneVolumeFn SelectOneVolumeFunc) error {
 	for _, vid := range overReplicatedVolumeIds {
 		replicas := volumeReplicas[vid]
 		replicaPlacement, _ := super_block.NewReplicaPlacementFromByte(byte(replicas[0].info.ReplicaPlacement))
@@ -214,16 +220,16 @@ func (c *commandVolumeFixReplication) deleteOneVolume(commandEnv *CommandEnv, wr
 	return nil
 }
 
-func (c *commandVolumeFixReplication) fixUnderReplicatedVolumes(commandEnv *CommandEnv, writer io.Writer, takeAction bool, underReplicatedVolumeIds []uint32, volumeReplicas map[uint32][]*VolumeReplica, allLocations []location, retryCount int, volumesPerStep int) (fixedVolumes map[string]int, err error) {
+func (c *commandVolumeFixReplication) fixUnderReplicatedVolumes(commandEnv *CommandEnv, writer io.Writer, takeAction bool, underReplicatedVolumeIds []VolumeKey, volumeReplicas map[VolumeKey][]*VolumeReplica, allLocations []location, retryCount int, volumesPerStep int) (fixedVolumes map[string]int, err error) {
 	fixedVolumes = map[string]int{}
 	if len(underReplicatedVolumeIds) > volumesPerStep && volumesPerStep > 0 {
 		underReplicatedVolumeIds = underReplicatedVolumeIds[0:volumesPerStep]
 	}
-	for _, vid := range underReplicatedVolumeIds {
+	for _, vkey := range underReplicatedVolumeIds {
 		for i := 0; i < retryCount+1; i++ {
-			if err = c.fixOneUnderReplicatedVolume(commandEnv, writer, takeAction, volumeReplicas, vid, allLocations); err == nil {
+			if err = c.fixOneUnderReplicatedVolume(commandEnv, writer, takeAction, volumeReplicas, vkey, allLocations); err == nil {
 				if takeAction {
-					fixedVolumes[strconv.FormatUint(uint64(vid), 10)] = len(volumeReplicas[vid])
+					fixedVolumes[strconv.FormatUint(uint64(vkey.Id), 10)] = len(volumeReplicas[vkey])
 				}
 				break
 			}
@@ -232,8 +238,8 @@ func (c *commandVolumeFixReplication) fixUnderReplicatedVolumes(commandEnv *Comm
 	return fixedVolumes, nil
 }
 
-func (c *commandVolumeFixReplication) fixOneUnderReplicatedVolume(commandEnv *CommandEnv, writer io.Writer, takeAction bool, volumeReplicas map[uint32][]*VolumeReplica, vid uint32, allLocations []location) error {
-	replicas := volumeReplicas[vid]
+func (c *commandVolumeFixReplication) fixOneUnderReplicatedVolume(commandEnv *CommandEnv, writer io.Writer, takeAction bool, volumeReplicas map[VolumeKey][]*VolumeReplica, vkey VolumeKey, allLocations []location) error {
+	replicas := volumeReplicas[vkey]
 	replica := pickOneReplicaToCopyFrom(replicas)
 	replicaPlacement, _ := super_block.NewReplicaPlacementFromByte(byte(replica.info.ReplicaPlacement))
 	foundNewLocation := false
