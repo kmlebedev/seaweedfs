@@ -144,7 +144,7 @@ func WithGrpcClient(streamingMode bool, fn func(*grpc.ClientConn) error, address
 		defer grpcConnection.Close()
 		executionErr := fn(grpcConnection)
 		if executionErr != nil {
-			return executionErr
+			return fmt.Errorf("grpc conn state %v: %v", grpcConnection.GetState(), executionErr)
 		}
 		return nil
 	}
