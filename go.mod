@@ -156,7 +156,7 @@ require (
 	github.com/hashicorp/raft v1.3.9
 	github.com/hashicorp/raft-boltdb v0.0.0-20220329195025-15018e9b97e0
 	github.com/ydb-platform/ydb-go-sdk-auth-environ v0.1.0
-	github.com/ydb-platform/ydb-go-sdk/v3 v3.25.0
+	github.com/ydb-platform/ydb-go-sdk/v3 v3.26.2
 )
 
 require (
@@ -191,6 +191,7 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
+	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.6 // indirect
 	github.com/mattn/go-colorable v0.1.12 // indirect
