@@ -84,6 +84,7 @@ func (s *StateMachine) Apply(l *hashicorpRaft.Log) interface{} {
 }
 
 func (s *StateMachine) Snapshot() (hashicorpRaft.FSMSnapshot, error) {
+	glog.V(1).Infof("Do snapshot max volume id %v", s.topo.GetMaxVolumeId())
 	return &topology.MaxVolumeIdCommand{
 		MaxVolumeId: s.topo.GetMaxVolumeId(),
 	}, nil
@@ -92,11 +93,14 @@ func (s *StateMachine) Snapshot() (hashicorpRaft.FSMSnapshot, error) {
 func (s *StateMachine) Restore(r io.ReadCloser) error {
 	b, err := ioutil.ReadAll(r)
 	if err != nil {
+		glog.Errorf("restore state %v", err)
 		return err
 	}
 	if err := s.Recovery(b); err != nil {
+		glog.Errorf("restore state %v", err)
 		return err
 	}
+	glog.V(1).Infof("Restored max volume id %v", s.topo.GetMaxVolumeId())
 	return nil
 }
 
@@ -144,7 +148,7 @@ func NewRaftServer(option *RaftServerOption) (*RaftServer, error) {
 	if err := s.raftServer.Start(); err != nil {
 		return nil, err
 	}
-
+	glog.V(1).Infof("Started raft max volume id %v", s.topo.GetMaxVolumeId())
 	for name, peer := range s.peers {
 		if err := s.raftServer.AddPeer(name, peer.ToGrpcAddress()); err != nil {
 			return nil, err

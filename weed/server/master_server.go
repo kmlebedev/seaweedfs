@@ -190,6 +190,8 @@ func (ms *MasterServer) SetRaftServer(raftServer *RaftServer) {
 				case isLeader := <-leaderCh:
 					leader := ms.Topo.HashicorpRaft.Leader()
 					glog.V(0).Infof("is leader %+v change event: %+v => %+v", isLeader, prevLeader, leader)
+					glog.V(0).Infof("leader change HashicorpRaft maxVolumeId %+v", ms.Topo.GetMaxVolumeId())
+					glog.V(0).Infof("raft state topo %+v", ms.Topo.GetTopology())
 					stats.MasterLeaderChangeCounter.WithLabelValues(fmt.Sprintf("%+v", leader)).Inc()
 					prevLeader = leader
 				}
