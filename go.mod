@@ -1,29 +1,25 @@
-module github.com/chrislusf/seaweedfs
+module github.com/seaweedfs/seaweedfs
 
 go 1.18
 
 require (
 	cloud.google.com/go v0.102.1 // indirect
-	cloud.google.com/go/pubsub v1.23.1
-	cloud.google.com/go/storage v1.23.0
+	cloud.google.com/go/pubsub v1.24.0
+	cloud.google.com/go/storage v1.24.0
 	github.com/Azure/azure-pipeline-go v0.2.3
 	github.com/Azure/azure-storage-blob-go v0.15.0
-	github.com/OneOfOne/xxhash v1.2.8
-	github.com/Shopify/sarama v1.34.1
-	github.com/aws/aws-sdk-go v1.44.56
+	github.com/Shopify/sarama v1.35.0
+	github.com/aws/aws-sdk-go v1.44.65
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/bwmarrin/snowflake v0.3.0
-	github.com/cespare/xxhash v1.1.0
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/chrislusf/raft v1.0.9
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/disintegration/imaging v1.6.2
 	github.com/dustin/go-humanize v1.0.0
-	github.com/eapache/go-resiliency v1.2.0 // indirect
+	github.com/eapache/go-resiliency v1.3.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20180814174437-776d5712da21 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a
@@ -61,11 +57,11 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/karlseguin/ccache/v2 v2.0.8
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
-	github.com/klauspost/compress v1.15.6 // indirect
+	github.com/klauspost/compress v1.15.8 // indirect
 	github.com/klauspost/reedsolomon v1.10.0
 	github.com/kurin/blazer v0.5.3
 	github.com/lib/pq v1.10.6
-	github.com/linxGnu/grocksdb v1.7.3
+	github.com/linxGnu/grocksdb v1.7.4
 	github.com/magiconair/properties v1.8.6 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-ieproxy v0.0.3 // indirect
@@ -88,8 +84,8 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 // indirect
 	github.com/seaweedfs/goexif v2.0.0+incompatible
+	github.com/seaweedfs/raft v1.1.0
 	github.com/sirupsen/logrus v1.8.1 // indirect
-	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/afero v1.8.2 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
@@ -120,17 +116,17 @@ require (
 	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d // indirect
 	golang.org/x/exp v0.0.0-20220414153411-bcd21879b8fd
 	golang.org/x/image v0.0.0-20200119044424-58c23975cae1
-	golang.org/x/net v0.0.0-20220624214902-1bab6f366d9e
+	golang.org/x/net v0.0.0-20220708220712-1185a9018129
 	golang.org/x/oauth2 v0.0.0-20220622183110-fd043fe589d2 // indirect
 	golang.org/x/sys v0.0.0-20220624220833-87e55d714810
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/tools v0.1.8-0.20211029000441-d6a9af8af023
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
-	google.golang.org/api v0.87.0
+	google.golang.org/api v0.90.0
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/genproto v0.0.0-20220624142145-8cd45d7dbd1f // indirect
 	google.golang.org/grpc v1.48.0
-	google.golang.org/protobuf v1.28.0
+	google.golang.org/protobuf v1.28.1
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	modernc.org/b v1.0.0 // indirect
 	modernc.org/cc/v3 v3.36.0 // indirect
@@ -139,21 +135,22 @@ require (
 	modernc.org/mathutil v1.4.1 // indirect
 	modernc.org/memory v1.1.1 // indirect
 	modernc.org/opt v0.1.1 // indirect
-	modernc.org/sqlite v1.17.3
+	modernc.org/sqlite v1.18.0
 	modernc.org/strutil v1.1.2
 	modernc.org/token v1.0.0 // indirect
 )
 
 require (
 	github.com/Jille/raft-grpc-transport v1.2.0
-	github.com/arangodb/go-driver v1.3.2
+	github.com/arangodb/go-driver v1.3.3
 	github.com/fluent/fluent-logger-golang v1.9.0
+	github.com/google/flatbuffers v2.0.6+incompatible
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220627082937-d01fda7edf17
 	github.com/hashicorp/raft v1.3.9
 	github.com/hashicorp/raft-boltdb v0.0.0-20220329195025-15018e9b97e0
 	github.com/tikv/client-go/v2 v2.0.1
 	github.com/ydb-platform/ydb-go-sdk-auth-environ v0.1.2
-	github.com/ydb-platform/ydb-go-sdk/v3 v3.28.3
+	github.com/ydb-platform/ydb-go-sdk/v3 v3.30.0
 	google.golang.org/grpc/security/advancedtls v0.0.0-20220622233350-5cdb09fa29c1
 )
 
@@ -184,7 +181,6 @@ require (
 	github.com/fclairamb/go-log v0.3.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.1.0 // indirect
-	github.com/googleapis/go-type-adapters v1.0.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0 // indirect
 	github.com/hashicorp/go-hclog v1.2.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
@@ -206,7 +202,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.1 // indirect
 	github.com/philhofer/fwd v1.1.1 // indirect
-	github.com/pierrec/lz4/v4 v4.1.14 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pingcap/errors v0.11.5-0.20211224045212-9687c2b0f87c // indirect
 	github.com/pingcap/failpoint v0.0.0-20210918120811-547c13e3eb00 // indirect
 	github.com/pingcap/kvproto v0.0.0-20220106070556-3fa8fa04f898 // indirect
@@ -235,4 +231,4 @@ require (
 	lukechampine.com/uint128 v1.1.1 // indirect
 )
 
-// replace github.com/chrislusf/raft => /Users/chrislu/go/src/github.com/chrislusf/raft
+// replace github.com/seaweedfs/raft => /Users/chrislu/go/src/github.com/seaweedfs/raft
