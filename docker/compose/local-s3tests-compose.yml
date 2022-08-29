@@ -2,7 +2,7 @@ version: '2'
 
 services:
   master:
-    image: chrislusf/seaweedfs:local
+    image: chrislusf/seaweedfs:go_build
     ports:
       - 9333:9333
       - 19333:19333
@@ -11,7 +11,7 @@ services:
       WEED_MASTER_VOLUME_GROWTH_COPY_1: 1
       WEED_MASTER_VOLUME_GROWTH_COPY_OTHER: 1
   volume:
-    image: chrislusf/seaweedfs:local
+    image: chrislusf/seaweedfs:go_build
     ports:
       - 8080:8080
       - 18080:18080
@@ -19,7 +19,7 @@ services:
     depends_on:
       - master
   s3:
-    image: chrislusf/seaweedfs:local
+    image: chrislusf/seaweedfs:go_build
     ports:
       - 8888:8888
       - 18888:18888

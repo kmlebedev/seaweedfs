@@ -4,11 +4,11 @@ all: gen
 
 gen: dev
 
-cgo ?= 0
+cgo ?= 1
 binary:
 	export SWCOMMIT=$(shell git rev-parse --short HEAD)
 	export SWLDFLAGS="-X github.com/seaweedfs/seaweedfs/weed/util.COMMIT=$(SWCOMMIT)"
-	cd ../weed; CGO_ENABLED=$(cgo) GOOS=linux go build $(options) -tags "$(tags)" -ldflags "-extldflags -static $(SWLDFLAGS)"; mv weed ../docker/
+	cd ../weed; CGO_ENABLED=$(cgo) CC="x86_64-linux-musl-gcc" CXX="x86_64-linux-musl-g++" GOOS=linux go build $(options) -tags "$(tags)" -ldflags "-extldflags -static $(SWLDFLAGS)"; mv weed ../docker/
 
 build: binary
 	docker build --no-cache -t chrislusf/seaweedfs:local -f Dockerfile.local .

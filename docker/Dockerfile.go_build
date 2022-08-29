@@ -1,13 +1,15 @@
 FROM golang:1.19-alpine as builder
-RUN apk add git g++ fuse
-RUN mkdir -p /go/src/github.com/chrislusf/
-RUN git clone https://github.com/seaweedfs/seaweedfs /go/src/github.com/seaweedfs/seaweedfs
-ARG BRANCH=${BRANCH:-master}
-ARG TAGS
-RUN cd /go/src/github.com/seaweedfs/seaweedfs && git checkout $BRANCH
-RUN cd /go/src/github.com/seaweedfs/seaweedfs/weed \
+#RUN apk add git g++ fuse
+RUN mkdir -p /go/src/github.com/seaweedfs/seaweedfs
+COPY ./weed /go/src/github.com/seaweedfs/seaweedfs/
+#RUN git clone https://github.com/seaweedfs/seaweedfs /go/src/github.com/seaweedfs/seaweedfs
+#ARG BRANCH=${BRANCH:-master}
+#ARG TAGS
+#RUN cd /go/src/github.com/seaweedfs/seaweedfs && git checkout $BRANCH
+RUN ls -l /go/src/github.com/seaweedfs/seaweedfs \
+  && cd /go/src/github.com/seaweedfs/seaweedfs/weed \
   && export LDFLAGS="-X github.com/seaweedfs/seaweedfs/weed/util.COMMIT=$(git rev-parse --short HEAD)" \
-  && CGO_ENABLED=0 go install -tags "$TAGS" -ldflags "-extldflags -static ${LDFLAGS}"
+  && CGO_ENABLED=1 go install -race -tags "$TAGS" -ldflags "-extldflags -static ${LDFLAGS}"
 
 FROM alpine AS final
 LABEL author="Chris Lu"

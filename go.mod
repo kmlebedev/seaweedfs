@@ -233,3 +233,4 @@ require (
 )
 
 // replace github.com/seaweedfs/raft => /Users/chrislu/go/src/github.com/seaweedfs/raft
+replace github.com/boltdb/bolt => github.com/kmlebedev/bolt v0.0.0-20220829105445-d4fe22e45ea9
