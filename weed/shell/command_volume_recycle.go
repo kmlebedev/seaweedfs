@@ -2,13 +2,13 @@ package shell
 
 import (
 	"context"
-	"errors"
 	"flag"
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
 	"io"
-	"log"
 	"sort"
 )
 
@@ -17,6 +17,8 @@ func init() {
 }
 
 type commandVolumeRecycle struct {
+	writer       io.Writer
+	applyRecycle *bool
 }
 
 func (c *commandVolumeRecycle) Name() string {
@@ -24,51 +26,53 @@ func (c *commandVolumeRecycle) Name() string {
 }
 
 func (c *commandVolumeRecycle) Help() string {
-	return `volume.recycle -percentageUsed=1  -recycleVolumeCounter=1
-	This command commandVolumeRecycle,When the cluster uses storage more than ${percentageUsed}, 
+	return `volume.recycle -freeThreshold=0.3
+	This command commandVolumeRecycle, when the cluster free storage more than ${freeThreshold}, 
      it will trigger the deletion of the oldest ${recycleVolumeCounter} file
 `
 }
 
-
-
 func (c *commandVolumeRecycle) Do(args []string, commandEnv *CommandEnv, writer io.Writer) (err error) {
 	recycleCommand := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
-	percentageUsed := recycleCommand.Uint64("percentageUsed", 80, "the source volume server <host>:<port>")
-	recycleVolumeCounter := recycleCommand.Int("recycleVolumeCounter", 80, "the source volume server <host>:<port>")
+	freeThreshold := recycleCommand.Float64("freeThreshold", 0.3, "recycle when free is more than this limit")
+	c.applyRecycle = recycleCommand.Bool("force", false, "apply to recycle volumes")
 	if err = recycleCommand.Parse(args); err != nil {
 		return nil
 	}
-	log.Printf("Param percentageUsed %d ,recycleVolumeCounter: %d \n", *percentageUsed, *recycleVolumeCounter)
-	topologyInfo, _, err := collectTopologyInfo(commandEnv)
-	if err != nil {
-		log.Printf("Error %s",err.Error())
-		return err
+	if err = commandEnv.confirmIsLocked(args); err != nil {
+		return
 	}
-	dataCenterInfo:=topologyInfo.DataCenterInfos
-	volumeIdToVolumeMap := make(map[uint32]string)
-	var volumeIds[] uint32
-	var volumeServers[] string
+	infoAboutSimulationMode(writer, *c.applyRecycle, "-force")
+
+	c.writer = writer
+	topologyInfo, _, err := collectTopologyInfo(commandEnv, 0)
+	if err != nil {
+		return
+	}
+	dataCenterInfo := topologyInfo.DataCenterInfos
+	volumeIdToVolumeMap := make(map[uint32]pb.ServerAddress)
+	var volumeIds []uint32
+	var volumeServers []pb.ServerAddress
 
 	for _, dataCenter := range dataCenterInfo {
 		if dataCenter.RackInfos == nil || len(dataCenter.RackInfos) == 0 {
-			log.Println("Error dataCenter rack is empty")
+			fmt.Fprintf(c.writer, "Error dataCenter rack is empty\n")
 			continue
 		}
-		for _, rack := range  dataCenter.RackInfos {
+		for _, rack := range dataCenter.RackInfos {
 			if rack.DataNodeInfos == nil || len(rack.DataNodeInfos) == 0 {
-				log.Println(" Error BuildClusterVo DataNodeInfos == nil || len(vr.DataNodeInfos) == 0")
+				fmt.Fprintf(c.writer, "Error BuildClusterVo DataNodeInfos == nil || len(vr.DataNodeInfos) == 0\n")
 				continue
 			}
 			for _, dataNode := range rack.DataNodeInfos {
-				volumeServers=append(volumeServers, dataNode.Id)
+				volumeServers = append(volumeServers, pb.NewServerAddressFromDataNode(dataNode))
 				for _, disk := range dataNode.DiskInfos {
 					if disk.VolumeInfos == nil || len(disk.VolumeInfos) == 0 {
-						log.Println(" Error disk.VolumeInfos == nil || len(disk.VolumeInfos) == 0")
+						fmt.Fprintf(c.writer, "Error disk.VolumeInfos == nil || len(disk.VolumeInfos) == 0\n")
 						continue
 					}
-					for _, volume := range  disk.VolumeInfos{
-						volumeIdToVolumeMap[volume.Id] = dataNode.Id
+					for _, volume := range disk.VolumeInfos {
+						volumeIdToVolumeMap[volume.Id] = pb.NewServerAddressFromDataNode(dataNode)
 						volumeIds = append(volumeIds, volume.Id)
 					}
 				}
@@ -82,72 +86,59 @@ func (c *commandVolumeRecycle) Do(args []string, commandEnv *CommandEnv, writer 
 		}
 		return false
 	})
-	diskStatus,errorDiskStatus:=volumeDisk(volumeServers,commandEnv)
-	if errorDiskStatus!=nil {
-		log.Println("Error",errorDiskStatus.Error())
+	diskStatus, errorDiskStatus := volumeDisk(volumeServers, commandEnv)
+	if errorDiskStatus != nil {
+		fmt.Fprintf(c.writer, "Error %+v\n", errorDiskStatus.Error())
 		return errorDiskStatus
 	}
-	usedPer := diskStatus.Used*100/diskStatus.All
-	log.Printf("Used:%d, all:%d,usedPer:%d\n",diskStatus.Used,diskStatus.All,usedPer)
-	if usedPer>= *percentageUsed {
-		deleteVolumeCounter:=*recycleVolumeCounter
-		if len(volumeIds) < *recycleVolumeCounter{
-			deleteVolumeCounter=len(volumeIds)
-		}
-		for i,volumeId := range volumeIds{
-			if i >= deleteVolumeCounter{
-				return
+	freePer := float64(diskStatus.Free) / float64(diskStatus.All)
+	fmt.Fprintf(c.writer, "Free:%d, all:%d, freePer:%f\n", diskStatus.Free, diskStatus.All, freePer)
+	if freePer >= *freeThreshold {
+		for _, volumeId := range volumeIds {
+			volumeServer := volumeIdToVolumeMap[volumeId]
+			err := deleteVolume(commandEnv.option.GrpcDialOption, needle.VolumeId(volumeId), volumeServer)
+			if err != nil {
+				fmt.Fprintf(c.writer, "Error deleteVolume %+v volumeId is %d  %s\n", volumeServer, volumeId, err.Error())
+				return err
 			}
-			volumeServer :=volumeIdToVolumeMap[volumeId]
-			err:=deleteVolume(commandEnv.option.GrpcDialOption, needle.VolumeId(volumeId), volumeServer)
-			if err!=nil{
-				log.Printf("Error deleteVolume %s volumeId is %d  %s\n",volumeServer,volumeId,err.Error())
-				return  err
-			}
-			log.Printf("deleteVolume %s  volumeId is %d success\n",volumeServer,volumeId)
+			fmt.Fprintf(c.writer, "deleteVolume %+v volumeId is %d success\n", volumeServer, volumeId)
 
 		}
 	}
-	log.Printf("VolumeRecycle do success\n")
+	fmt.Fprintf(c.writer, "VolumeRecycle do success\n")
 	return nil
 }
 
-
 /*
- Get cluster storage information
+Get cluster storage information
 */
-func volumeDisk(volumeServers []string,commandEnv *CommandEnv)  (volume_server_pb.DiskStatus,error){
+func volumeDisk(volumeServers []pb.ServerAddress, commandEnv *CommandEnv) (diskStatus volume_server_pb.DiskStatus, err error) {
 
-	var diskAll  uint64
-	var diskFree  uint64
-	var diskUsed  uint64
-	var diskStatus volume_server_pb.DiskStatus
-	for _,volumeServer := range  volumeServers{
-		err := operation.WithVolumeServerClient(volumeServer, commandEnv.option.GrpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
-			resp, statusErr := volumeServerClient.VolumeServerStatus(context.Background(), &volume_server_pb.VolumeServerStatusRequest{
-			})
+	var diskAll uint64
+	var diskFree uint64
+	var diskUsed uint64
+	for _, volumeServer := range volumeServers {
+		err := operation.WithVolumeServerClient(false, volumeServer, commandEnv.option.GrpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+			resp, statusErr := volumeServerClient.VolumeServerStatus(context.Background(), &volume_server_pb.VolumeServerStatusRequest{})
 			if statusErr != nil {
 				return statusErr
 			}
-			if(resp.DiskStatuses==nil || len(resp.DiskStatuses) == 0){
-				return  errors.New(volumeServer+" Disk is empty")
+			if resp.DiskStatuses == nil || len(resp.DiskStatuses) == 0 {
+				return fmt.Errorf("%+v Disk is empty", volumeServer)
 			}
-			for _,disk := range resp.DiskStatuses {
-				diskFree+=disk.Free
-				diskAll+=disk.All
-				diskUsed+=disk.Used
+			for _, disk := range resp.DiskStatuses {
+				diskFree += disk.Free
+				diskAll += disk.All
+				diskUsed += disk.Used
 			}
 			return nil
 		})
 		if err != nil {
-			return diskStatus,err
+			return diskStatus, err
 		}
 	}
-	diskStatus.All  = diskAll
+	diskStatus.All = diskAll
 	diskStatus.Used = diskUsed
 	diskStatus.Free = diskFree
-	return diskStatus,nil
+	return diskStatus, nil
 }
-
-
-
