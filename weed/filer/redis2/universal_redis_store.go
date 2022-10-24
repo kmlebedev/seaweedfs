@@ -7,10 +7,10 @@ import (
 
 	"github.com/go-redis/redis/v8"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 const (
@@ -47,17 +47,8 @@ func (store *UniversalRedis2Store) RollbackTransaction(ctx context.Context) erro
 
 func (store *UniversalRedis2Store) InsertEntry(ctx context.Context, entry *filer.Entry) (err error) {
 
-	value, err := entry.EncodeAttributesAndChunks()
-	if err != nil {
-		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
-	}
-
-	if len(entry.Chunks) > 50 {
-		value = util.MaybeGzipData(value)
-	}
-
-	if err = store.Client.Set(ctx, string(entry.FullPath), value, time.Duration(entry.TtlSec)*time.Second).Err(); err != nil {
-		return fmt.Errorf("persisting %s : %v", entry.FullPath, err)
+	if err = store.doInsertEntry(ctx, entry); err != nil {
+		return err
 	}
 
 	dir, name := entry.FullPath.DirAndName()
@@ -74,9 +65,25 @@ func (store *UniversalRedis2Store) InsertEntry(ctx context.Context, entry *filer
 	return nil
 }
 
+func (store *UniversalRedis2Store) doInsertEntry(ctx context.Context, entry *filer.Entry) error {
+	value, err := entry.EncodeAttributesAndChunks()
+	if err != nil {
+		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
+	}
+
+	if len(entry.Chunks) > filer.CountEntryChunksForGzip {
+		value = util.MaybeGzipData(value)
+	}
+
+	if err = store.Client.Set(ctx, string(entry.FullPath), value, time.Duration(entry.TtlSec)*time.Second).Err(); err != nil {
+		return fmt.Errorf("persisting %s : %v", entry.FullPath, err)
+	}
+	return nil
+}
+
 func (store *UniversalRedis2Store) UpdateEntry(ctx context.Context, entry *filer.Entry) (err error) {
 
-	return store.InsertEntry(ctx, entry)
+	return store.doInsertEntry(ctx, entry)
 }
 
 func (store *UniversalRedis2Store) FindEntry(ctx context.Context, fullpath util.FullPath) (entry *filer.Entry, err error) {
@@ -133,7 +140,10 @@ func (store *UniversalRedis2Store) DeleteFolderChildren(ctx context.Context, ful
 		return nil
 	}
 
-	members, err := store.Client.ZRange(ctx, genDirectoryListKey(string(fullpath)), 0, -1).Result()
+	members, err := store.Client.ZRangeByLex(ctx, genDirectoryListKey(string(fullpath)), &redis.ZRangeBy{
+		Min: "-",
+		Max: "+",
+	}).Result()
 	if err != nil {
 		return fmt.Errorf("DeleteFolderChildren %s : %v", fullpath, err)
 	}
@@ -144,6 +154,8 @@ func (store *UniversalRedis2Store) DeleteFolderChildren(ctx context.Context, ful
 		if err != nil {
 			return fmt.Errorf("DeleteFolderChildren %s in parent dir: %v", fullpath, err)
 		}
+		// not efficient, but need to remove if it is a directory
+		store.Client.Del(ctx, genDirectoryListKey(string(path)))
 	}
 
 	return nil
@@ -156,14 +168,22 @@ func (store *UniversalRedis2Store) ListDirectoryPrefixedEntries(ctx context.Cont
 func (store *UniversalRedis2Store) ListDirectoryEntries(ctx context.Context, dirPath util.FullPath, startFileName string, includeStartFile bool, limit int64, eachEntryFunc filer.ListEachEntryFunc) (lastFileName string, err error) {
 
 	dirListKey := genDirectoryListKey(string(dirPath))
-	start := int64(0)
+
+	min := "-"
 	if startFileName != "" {
-		start, _ = store.Client.ZRank(ctx, dirListKey, startFileName).Result()
-		if !includeStartFile {
-			start++
+		if includeStartFile {
+			min = "[" + startFileName
+		} else {
+			min = "(" + startFileName
 		}
 	}
-	members, err := store.Client.ZRange(ctx, dirListKey, start, start+int64(limit)-1).Result()
+
+	members, err := store.Client.ZRangeByLex(ctx, dirListKey, &redis.ZRangeBy{
+		Min:    min,
+		Max:    "+",
+		Offset: 0,
+		Count:  limit,
+	}).Result()
 	if err != nil {
 		return lastFileName, fmt.Errorf("list %s : %v", dirPath, err)
 	}

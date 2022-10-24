@@ -9,12 +9,12 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/pb"
-	"github.com/chrislusf/seaweedfs/weed/security"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/security"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 type ReplicationSource interface {
@@ -27,9 +27,11 @@ type FilerSource struct {
 	Dir            string
 	address        string
 	proxyByFiler   bool
+	dataCenter     string
 }
 
 func (fs *FilerSource) Initialize(configuration util.Configuration, prefix string) error {
+	fs.dataCenter = configuration.GetString(prefix + "dataCenter")
 	return fs.DoInitialize(
 		"",
 		configuration.GetString(prefix+"grpcAddress"),
@@ -56,7 +58,7 @@ func (fs *FilerSource) LookupFileId(part string) (fileUrls []string, err error) 
 
 	vid := volumeId(part)
 
-	err = fs.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	err = fs.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 
 		resp, err := client.LookupVolume(context.Background(), &filer_pb.LookupVolumeRequest{
 			VolumeIds: []string{vid},
@@ -84,7 +86,13 @@ func (fs *FilerSource) LookupFileId(part string) (fileUrls []string, err error) 
 
 	if !fs.proxyByFiler {
 		for _, loc := range locations.Locations {
-			fileUrls = append(fileUrls, fmt.Sprintf("http://%s/%s?readDeleted=true", loc.Url, part))
+			fileUrl := fmt.Sprintf("http://%s/%s?readDeleted=true", loc.Url, part)
+			// Prefer same data center
+			if fs.dataCenter != "" && fs.dataCenter == loc.DataCenter {
+				fileUrls = append([]string{fileUrl}, fileUrls...)
+			} else {
+				fileUrls = append(fileUrls, fileUrl)
+			}
 		}
 	} else {
 		fileUrls = append(fileUrls, fmt.Sprintf("http://%s/?proxyChunkId=%s", fs.address, part))
@@ -118,17 +126,21 @@ func (fs *FilerSource) ReadPart(fileId string) (filename string, header http.Hea
 
 var _ = filer_pb.FilerClient(&FilerSource{})
 
-func (fs *FilerSource) WithFilerClient(fn func(filer_pb.SeaweedFilerClient) error) error {
+func (fs *FilerSource) WithFilerClient(streamingMode bool, fn func(filer_pb.SeaweedFilerClient) error) error {
 
-	return pb.WithCachedGrpcClient(func(grpcConnection *grpc.ClientConn) error {
+	return pb.WithGrpcClient(streamingMode, func(grpcConnection *grpc.ClientConn) error {
 		client := filer_pb.NewSeaweedFilerClient(grpcConnection)
 		return fn(client)
-	}, fs.grpcAddress, fs.grpcDialOption)
+	}, fs.grpcAddress, false, fs.grpcDialOption)
 
 }
 
 func (fs *FilerSource) AdjustedUrl(location *filer_pb.Location) string {
 	return location.Url
+}
+
+func (fs *FilerSource) GetDataCenter() string {
+	return fs.dataCenter
 }
 
 func volumeId(fileId string) string {

@@ -1,15 +1,18 @@
 package backend
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"os"
+	"runtime"
 	"time"
 )
 
 var (
 	_ BackendStorageFile = &DiskFile{}
 )
+
+const isMac = runtime.GOOS == "darwin"
 
 type DiskFile struct {
 	File         *os.File
@@ -66,11 +69,17 @@ func (df *DiskFile) Truncate(off int64) error {
 }
 
 func (df *DiskFile) Close() error {
+	if err := df.Sync(); err != nil {
+		return err
+	}
 	return df.File.Close()
 }
 
 func (df *DiskFile) GetStat() (datSize int64, modTime time.Time, err error) {
-	return df.fileSize, df.modTime, nil
+	if df.File == nil {
+		err = os.ErrInvalid
+	}
+	return df.fileSize, df.modTime, err
 }
 
 func (df *DiskFile) Name() string {
@@ -78,5 +87,11 @@ func (df *DiskFile) Name() string {
 }
 
 func (df *DiskFile) Sync() error {
+	if df.File == nil {
+		return os.ErrInvalid
+	}
+	if isMac {
+		return nil
+	}
 	return df.File.Sync()
 }

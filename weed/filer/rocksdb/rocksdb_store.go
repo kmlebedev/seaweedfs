@@ -1,3 +1,4 @@
+//go:build rocksdb
 // +build rocksdb
 
 package rocksdb
@@ -10,12 +11,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/tecbot/gorocksdb"
+	gorocksdb "github.com/linxGnu/grocksdb"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	weed_util "github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	weed_util "github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -122,7 +123,7 @@ func (store *RocksDBStore) FindEntry(ctx context.Context, fullpath weed_util.Ful
 	key := genKey(dir, name)
 	data, err := store.db.Get(store.ro, key)
 
-	if data == nil {
+	if data == nil || !data.Exists() {
 		return nil, filer_pb.ErrNotFound
 	}
 	defer data.Free()

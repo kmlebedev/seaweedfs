@@ -3,8 +3,9 @@ package main
 import (
 	"embed"
 	"fmt"
-	weed_server "github.com/chrislusf/seaweedfs/weed/server"
-	flag "github.com/chrislusf/seaweedfs/weed/util/fla9"
+	weed_server "github.com/seaweedfs/seaweedfs/weed/server"
+	"github.com/seaweedfs/seaweedfs/weed/util"
+	flag "github.com/seaweedfs/seaweedfs/weed/util/fla9"
 	"io"
 	"io/fs"
 	"math/rand"
@@ -16,8 +17,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chrislusf/seaweedfs/weed/command"
-	"github.com/chrislusf/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/command"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
 )
 
 var IsDebug *bool
@@ -40,6 +41,8 @@ var static embed.FS
 
 func init() {
 	weed_server.StaticFS, _ = fs.Sub(static, "static")
+
+	flag.Var(&util.ConfigurationFileDirectory, "config_dir", "directory with toml configuration files")
 }
 
 func main() {

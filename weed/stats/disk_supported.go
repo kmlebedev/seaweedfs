@@ -1,3 +1,4 @@
+//go:build !windows && !openbsd && !netbsd && !plan9 && !solaris
 // +build !windows,!openbsd,!netbsd,!plan9,!solaris
 
 package stats
@@ -5,7 +6,7 @@ package stats
 import (
 	"syscall"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
 )
 
 func fillInDiskStatus(disk *volume_server_pb.DiskStatus) {

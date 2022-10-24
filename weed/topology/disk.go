@@ -2,15 +2,16 @@ package topology
 
 import (
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 	"sync"
+	"sync/atomic"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/erasure_coding"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/erasure_coding"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
 
-	"github.com/chrislusf/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
 )
 
 type Disk struct {
@@ -100,11 +101,11 @@ type DiskUsageCounts struct {
 }
 
 func (a *DiskUsageCounts) addDiskUsageCounts(b *DiskUsageCounts) {
-	a.volumeCount += b.volumeCount
-	a.remoteVolumeCount += b.remoteVolumeCount
-	a.activeVolumeCount += b.activeVolumeCount
-	a.ecShardCount += b.ecShardCount
-	a.maxVolumeCount += b.maxVolumeCount
+	atomic.AddInt64(&a.volumeCount, b.volumeCount)
+	atomic.AddInt64(&a.remoteVolumeCount, b.remoteVolumeCount)
+	atomic.AddInt64(&a.activeVolumeCount, b.activeVolumeCount)
+	atomic.AddInt64(&a.ecShardCount, b.ecShardCount)
+	atomic.AddInt64(&a.maxVolumeCount, b.maxVolumeCount)
 }
 
 func (a *DiskUsageCounts) FreeSpace() int64 {
@@ -143,13 +144,13 @@ func (d *Disk) String() string {
 	return fmt.Sprintf("Disk:%s, volumes:%v, ecShards:%v", d.NodeImpl.String(), d.volumes, d.ecShards)
 }
 
-func (d *Disk) AddOrUpdateVolume(v storage.VolumeInfo) (isNew, isChangedRO bool) {
+func (d *Disk) AddOrUpdateVolume(v storage.VolumeInfo) (isNew, isChanged bool) {
 	d.Lock()
 	defer d.Unlock()
 	return d.doAddOrUpdateVolume(v)
 }
 
-func (d *Disk) doAddOrUpdateVolume(v storage.VolumeInfo) (isNew, isChangedRO bool) {
+func (d *Disk) doAddOrUpdateVolume(v storage.VolumeInfo) (isNew, isChanged bool) {
 	deltaDiskUsages := newDiskUsages()
 	deltaDiskUsage := deltaDiskUsages.getOrCreateDisk(types.ToDiskType(v.DiskType))
 	if oldV, ok := d.volumes[v.Id]; !ok {
@@ -174,7 +175,7 @@ func (d *Disk) doAddOrUpdateVolume(v storage.VolumeInfo) (isNew, isChangedRO boo
 			}
 			d.UpAdjustDiskUsageDelta(deltaDiskUsages)
 		}
-		isChangedRO = d.volumes[v.Id].ReadOnly != v.ReadOnly
+		isChanged = d.volumes[v.Id].ReadOnly != v.ReadOnly
 		d.volumes[v.Id] = v
 	}
 	return

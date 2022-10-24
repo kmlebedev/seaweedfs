@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 var (
@@ -20,15 +20,16 @@ var (
 )
 
 type FilerClient interface {
-	WithFilerClient(fn func(SeaweedFilerClient) error) error
+	WithFilerClient(streamingMode bool, fn func(SeaweedFilerClient) error) error
 	AdjustedUrl(location *Location) string
+	GetDataCenter() string
 }
 
 func GetEntry(filerClient FilerClient, fullFilePath util.FullPath) (entry *Entry, err error) {
 
 	dir, name := fullFilePath.DirAndName()
 
-	err = filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	err = filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 
 		request := &LookupDirectoryEntryRequest{
 			Directory: dir,
@@ -38,9 +39,6 @@ func GetEntry(filerClient FilerClient, fullFilePath util.FullPath) (entry *Entry
 		// glog.V(3).Infof("read %s request: %v", fullFilePath, request)
 		resp, err := LookupEntry(client, request)
 		if err != nil {
-			if err == ErrNotFound {
-				return nil
-			}
 			glog.V(3).Infof("read %s %v: %v", fullFilePath, resp, err)
 			return err
 		}
@@ -57,9 +55,9 @@ func GetEntry(filerClient FilerClient, fullFilePath util.FullPath) (entry *Entry
 	return
 }
 
-type EachEntryFunciton func(entry *Entry, isLast bool) error
+type EachEntryFunction func(entry *Entry, isLast bool) error
 
-func ReadDirAllEntries(filerClient FilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunciton) (err error) {
+func ReadDirAllEntries(filerClient FilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunction) (err error) {
 
 	var counter uint32
 	var startFrom string
@@ -85,27 +83,31 @@ func ReadDirAllEntries(filerClient FilerClient, fullDirPath util.FullPath, prefi
 	return nil
 }
 
-func List(filerClient FilerClient, parentDirectoryPath, prefix string, fn EachEntryFunciton, startFrom string, inclusive bool, limit uint32) (err error) {
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+func List(filerClient FilerClient, parentDirectoryPath, prefix string, fn EachEntryFunction, startFrom string, inclusive bool, limit uint32) (err error) {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 		return doSeaweedList(client, util.FullPath(parentDirectoryPath), prefix, fn, startFrom, inclusive, limit)
 	})
 }
 
-func doList(filerClient FilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunciton, startFrom string, inclusive bool, limit uint32) (err error) {
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+func doList(filerClient FilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunction, startFrom string, inclusive bool, limit uint32) (err error) {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 		return doSeaweedList(client, fullDirPath, prefix, fn, startFrom, inclusive, limit)
 	})
 }
 
-func SeaweedList(client SeaweedFilerClient, parentDirectoryPath, prefix string, fn EachEntryFunciton, startFrom string, inclusive bool, limit uint32) (err error) {
+func SeaweedList(client SeaweedFilerClient, parentDirectoryPath, prefix string, fn EachEntryFunction, startFrom string, inclusive bool, limit uint32) (err error) {
 	return doSeaweedList(client, util.FullPath(parentDirectoryPath), prefix, fn, startFrom, inclusive, limit)
 }
 
-func doSeaweedList(client SeaweedFilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunciton, startFrom string, inclusive bool, limit uint32) (err error) {
+func doSeaweedList(client SeaweedFilerClient, fullDirPath util.FullPath, prefix string, fn EachEntryFunction, startFrom string, inclusive bool, limit uint32) (err error) {
 	// Redundancy limit to make it correctly judge whether it is the last file.
 	redLimit := limit
-	if limit != math.MaxInt32 && limit != 0 {
+
+	if limit < math.MaxInt32 && limit != 0 {
 		redLimit = limit + 1
+	}
+	if redLimit > math.MaxInt32 {
+		redLimit = math.MaxInt32
 	}
 	request := &ListEntriesRequest{
 		Directory:          string(fullDirPath),
@@ -156,7 +158,7 @@ func doSeaweedList(client SeaweedFilerClient, fullDirPath util.FullPath, prefix 
 
 func Exists(filerClient FilerClient, parentDirectoryPath string, entryName string, isDirectory bool) (exists bool, err error) {
 
-	err = filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	err = filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 
 		request := &LookupDirectoryEntryRequest{
 			Directory: parentDirectoryPath,
@@ -184,7 +186,7 @@ func Exists(filerClient FilerClient, parentDirectoryPath string, entryName strin
 
 func Touch(filerClient FilerClient, parentDirectoryPath string, entryName string, entry *Entry) (err error) {
 
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 
 		request := &UpdateEntryRequest{
 			Directory: parentDirectoryPath,
@@ -203,7 +205,7 @@ func Touch(filerClient FilerClient, parentDirectoryPath string, entryName string
 }
 
 func Mkdir(filerClient FilerClient, parentDirectoryPath string, dirName string, fn func(entry *Entry)) error {
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 		return DoMkdir(client, parentDirectoryPath, dirName, fn)
 	})
 }
@@ -240,7 +242,7 @@ func DoMkdir(client SeaweedFilerClient, parentDirectoryPath string, dirName stri
 }
 
 func MkFile(filerClient FilerClient, parentDirectoryPath string, fileName string, chunks []*FileChunk, fn func(entry *Entry)) error {
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 
 		entry := &Entry{
 			Name:        fileName,
@@ -275,7 +277,7 @@ func MkFile(filerClient FilerClient, parentDirectoryPath string, fileName string
 }
 
 func Remove(filerClient FilerClient, parentDirectoryPath, name string, isDeleteData, isRecursive, ignoreRecursiveErr, isFromOtherCluster bool, signatures []int32) error {
-	return filerClient.WithFilerClient(func(client SeaweedFilerClient) error {
+	return filerClient.WithFilerClient(false, func(client SeaweedFilerClient) error {
 		return DoRemove(client, parentDirectoryPath, name, isDeleteData, isRecursive, ignoreRecursiveErr, isFromOtherCluster, signatures)
 	})
 }

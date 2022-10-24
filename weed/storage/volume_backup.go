@@ -3,17 +3,18 @@ package storage
 import (
 	"context"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
 	"io"
 	"os"
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/idx"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/super_block"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/idx"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/super_block"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 func (v *Volume) GetVolumeSyncStatus() *volume_server_pb.VolumeSyncStatusResponse {
@@ -62,7 +63,7 @@ update needle map when receiving new .dat bytes. But seems not necessary now.)
 
 */
 
-func (v *Volume) IncrementalBackup(volumeServer string, grpcDialOption grpc.DialOption) error {
+func (v *Volume) IncrementalBackup(volumeServer pb.ServerAddress, grpcDialOption grpc.DialOption) error {
 
 	startFromOffset, _, _ := v.FileStat()
 	appendAtNs, err := v.findLastAppendAtNs()
@@ -72,7 +73,7 @@ func (v *Volume) IncrementalBackup(volumeServer string, grpcDialOption grpc.Dial
 
 	writeOffset := int64(startFromOffset)
 
-	err = operation.WithVolumeServerClient(volumeServer, grpcDialOption, func(client volume_server_pb.VolumeServerClient) error {
+	err = operation.WithVolumeServerClient(false, volumeServer, grpcDialOption, func(client volume_server_pb.VolumeServerClient) error {
 
 		stream, err := client.VolumeIncrementalCopy(context.Background(), &volume_server_pb.VolumeIncrementalCopyRequest{
 			VolumeId: uint32(v.Id),
@@ -190,12 +191,42 @@ func (v *Volume) BinarySearchByAppendAtNs(sinceNs uint64) (offset Offset, isLast
 		// read the appendAtNs for entry m
 		offset, err = v.readOffsetFromIndex(m)
 		if err != nil {
+			err = fmt.Errorf("read entry %d: %v", m, err)
 			return
+		}
+		if offset.IsZero() {
+			leftIndex, _, leftNs, leftErr := v.readLeftNs(m)
+			if leftErr != nil {
+				err = leftErr
+				return
+			}
+			rightIndex, rightOffset, rightNs, rightErr := v.readRightNs(m)
+			if rightErr != nil {
+				err = rightErr
+				return
+			}
+			if rightNs <= sinceNs {
+				l = rightIndex
+				if l == entryCount {
+					return Offset{}, true, nil
+				} else {
+					continue
+				}
+			}
+			if sinceNs < leftNs {
+				h = leftIndex + 1
+				continue
+			}
+			return rightOffset, false, nil
+
+		}
+		if offset.IsZero() {
+			return Offset{}, true, nil
 		}
 
 		mNs, nsReadErr := v.readAppendAtNs(offset)
 		if nsReadErr != nil {
-			err = nsReadErr
+			err = fmt.Errorf("read entry %d offset %d: %v", m, offset, nsReadErr)
 			return
 		}
 
@@ -216,6 +247,38 @@ func (v *Volume) BinarySearchByAppendAtNs(sinceNs uint64) (offset Offset, isLast
 
 	return offset, false, err
 
+}
+
+func (v *Volume) readRightNs(m int64) (index int64, offset Offset, ts uint64, err error) {
+	index = m
+	for offset.IsZero() {
+		index++
+		offset, err = v.readOffsetFromIndex(index)
+		if err != nil {
+			err = fmt.Errorf("read entry %d: %v", index, err)
+			return
+		}
+	}
+	if !offset.IsZero() {
+		ts, err = v.readAppendAtNs(offset)
+	}
+	return
+}
+
+func (v *Volume) readLeftNs(m int64) (index int64, offset Offset, ts uint64, err error) {
+	index = m
+	for offset.IsZero() {
+		index--
+		offset, err = v.readOffsetFromIndex(index)
+		if err != nil {
+			err = fmt.Errorf("read entry %d: %v", index, err)
+			return
+		}
+	}
+	if !offset.IsZero() {
+		ts, err = v.readAppendAtNs(offset)
+	}
+	return
 }
 
 // bytes is of size NeedleMapEntrySize

@@ -3,16 +3,13 @@ package chunk_cache
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"github.com/seaweedfs/seaweedfs/weed/util/mem"
 	"math/rand"
-	"os"
 	"testing"
 )
 
 func TestOnDisk(t *testing.T) {
-
-	tmpDir, _ := ioutil.TempDir("", "c")
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	totalDiskSizeInKB := int64(32)
 
@@ -22,7 +19,7 @@ func TestOnDisk(t *testing.T) {
 	type test_data struct {
 		data   []byte
 		fileId string
-		size   uint64
+		size   int
 	}
 	testData := make([]*test_data, writeCount)
 	for i := 0; i < writeCount; i++ {
@@ -31,29 +28,35 @@ func TestOnDisk(t *testing.T) {
 		testData[i] = &test_data{
 			data:   buff,
 			fileId: fmt.Sprintf("1,%daabbccdd", i+1),
-			size:   uint64(len(buff)),
+			size:   len(buff),
 		}
 		cache.SetChunk(testData[i].fileId, testData[i].data)
 
 		// read back right after write
-		data := cache.GetChunk(testData[i].fileId, testData[i].size)
+		data := mem.Allocate(testData[i].size)
+		cache.ReadChunkAt(data, testData[i].fileId, 0)
 		if bytes.Compare(data, testData[i].data) != 0 {
 			t.Errorf("failed to write to and read from cache: %d", i)
 		}
+		mem.Free(data)
 	}
 
 	for i := 0; i < 2; i++ {
-		data := cache.GetChunk(testData[i].fileId, testData[i].size)
+		data := mem.Allocate(testData[i].size)
+		cache.ReadChunkAt(data, testData[i].fileId, 0)
 		if bytes.Compare(data, testData[i].data) == 0 {
 			t.Errorf("old cache should have been purged: %d", i)
 		}
+		mem.Free(data)
 	}
 
 	for i := 2; i < writeCount; i++ {
-		data := cache.GetChunk(testData[i].fileId, testData[i].size)
+		data := mem.Allocate(testData[i].size)
+		cache.ReadChunkAt(data, testData[i].fileId, 0)
 		if bytes.Compare(data, testData[i].data) != 0 {
 			t.Errorf("failed to write to and read from cache: %d", i)
 		}
+		mem.Free(data)
 	}
 
 	cache.Shutdown()
@@ -61,10 +64,12 @@ func TestOnDisk(t *testing.T) {
 	cache = NewTieredChunkCache(2, tmpDir, totalDiskSizeInKB, 1024)
 
 	for i := 0; i < 2; i++ {
-		data := cache.GetChunk(testData[i].fileId, testData[i].size)
+		data := mem.Allocate(testData[i].size)
+		cache.ReadChunkAt(data, testData[i].fileId, 0)
 		if bytes.Compare(data, testData[i].data) == 0 {
 			t.Errorf("old cache should have been purged: %d", i)
 		}
+		mem.Free(data)
 	}
 
 	for i := 2; i < writeCount; i++ {
@@ -83,14 +88,16 @@ func TestOnDisk(t *testing.T) {
 				--- FAIL: TestOnDisk (0.19s)
 				    chunk_cache_on_disk_test.go:73: failed to write to and read from cache: 4
 				FAIL
-				FAIL	github.com/chrislusf/seaweedfs/weed/util/chunk_cache	0.199s
+				FAIL	github.com/seaweedfs/seaweedfs/weed/util/chunk_cache	0.199s
 			*/
 			continue
 		}
-		data := cache.GetChunk(testData[i].fileId, testData[i].size)
+		data := mem.Allocate(testData[i].size)
+		cache.ReadChunkAt(data, testData[i].fileId, 0)
 		if bytes.Compare(data, testData[i].data) != 0 {
 			t.Errorf("failed to write to and read from cache: %d", i)
 		}
+		mem.Free(data)
 	}
 
 	cache.Shutdown()

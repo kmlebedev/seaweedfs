@@ -4,14 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/wdclient"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/wdclient"
 	"io"
 	"log"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
 	"google.golang.org/grpc"
 )
 
@@ -49,20 +50,21 @@ func (c *commandVolumeMove) Help() string {
 
 func (c *commandVolumeMove) Do(args []string, commandEnv *CommandEnv, writer io.Writer) (err error) {
 
-	if err = commandEnv.confirmIsLocked(); err != nil {
-		return
-	}
-
 	volMoveCommand := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
 	volumeIdInt := volMoveCommand.Int("volumeId", 0, "the volume id")
 	sourceNodeStr := volMoveCommand.String("source", "", "the source volume server <host>:<port>")
 	targetNodeStr := volMoveCommand.String("target", "", "the target volume server <host>:<port>")
 	diskTypeStr := volMoveCommand.String("disk", "", "[hdd|ssd|<tag>] hard drive or solid state drive or any tag")
+	ioBytePerSecond := volMoveCommand.Int64("ioBytePerSecond", 0, "limit the speed of move")
 	if err = volMoveCommand.Parse(args); err != nil {
 		return nil
 	}
 
-	sourceVolumeServer, targetVolumeServer := *sourceNodeStr, *targetNodeStr
+	if err = commandEnv.confirmIsLocked(args); err != nil {
+		return
+	}
+
+	sourceVolumeServer, targetVolumeServer := pb.ServerAddress(*sourceNodeStr), pb.ServerAddress(*targetNodeStr)
 
 	volumeId := needle.VolumeId(*volumeIdInt)
 
@@ -70,14 +72,14 @@ func (c *commandVolumeMove) Do(args []string, commandEnv *CommandEnv, writer io.
 		return fmt.Errorf("source and target volume servers are the same!")
 	}
 
-	return LiveMoveVolume(commandEnv.option.GrpcDialOption, writer, volumeId, sourceVolumeServer, targetVolumeServer, 5*time.Second, *diskTypeStr, false)
+	return LiveMoveVolume(commandEnv.option.GrpcDialOption, writer, volumeId, sourceVolumeServer, targetVolumeServer, 5*time.Second, *diskTypeStr, *ioBytePerSecond, false)
 }
 
 // LiveMoveVolume moves one volume from one source volume server to one target volume server, with idleTimeout to drain the incoming requests.
-func LiveMoveVolume(grpcDialOption grpc.DialOption, writer io.Writer, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer string, idleTimeout time.Duration, diskType string, skipTailError bool) (err error) {
+func LiveMoveVolume(grpcDialOption grpc.DialOption, writer io.Writer, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer pb.ServerAddress, idleTimeout time.Duration, diskType string, ioBytePerSecond int64, skipTailError bool) (err error) {
 
 	log.Printf("copying volume %d from %s to %s", volumeId, sourceVolumeServer, targetVolumeServer)
-	lastAppendAtNs, err := copyVolume(grpcDialOption, volumeId, sourceVolumeServer, targetVolumeServer, diskType)
+	lastAppendAtNs, err := copyVolume(grpcDialOption, writer, volumeId, sourceVolumeServer, targetVolumeServer, diskType, ioBytePerSecond)
 	if err != nil {
 		return fmt.Errorf("copy volume %d from %s to %s: %v", volumeId, sourceVolumeServer, targetVolumeServer, err)
 	}
@@ -100,7 +102,7 @@ func LiveMoveVolume(grpcDialOption grpc.DialOption, writer io.Writer, volumeId n
 	return nil
 }
 
-func copyVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer string, diskType string) (lastAppendAtNs uint64, err error) {
+func copyVolume(grpcDialOption grpc.DialOption, writer io.Writer, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer pb.ServerAddress, diskType string, ioBytePerSecond int64) (lastAppendAtNs uint64, err error) {
 
 	// check to see if the volume is already read-only and if its not then we need
 	// to mark it as read-only and then before we return we need to undo what we
@@ -111,7 +113,7 @@ func copyVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, source
 			return
 		}
 
-		clientErr := operation.WithVolumeServerClient(sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+		clientErr := operation.WithVolumeServerClient(false, sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 			_, writableErr := volumeServerClient.VolumeMarkWritable(context.Background(), &volume_server_pb.VolumeMarkWritableRequest{
 				VolumeId: uint32(volumeId),
 			})
@@ -122,7 +124,7 @@ func copyVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, source
 		}
 	}()
 
-	err = operation.WithVolumeServerClient(sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+	err = operation.WithVolumeServerClient(false, sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 		resp, statusErr := volumeServerClient.VolumeStatus(context.Background(), &volume_server_pb.VolumeStatusRequest{
 			VolumeId: uint32(volumeId),
 		})
@@ -139,37 +141,54 @@ func copyVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, source
 		return
 	}
 
-	err = operation.WithVolumeServerClient(targetVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
-		resp, replicateErr := volumeServerClient.VolumeCopy(context.Background(), &volume_server_pb.VolumeCopyRequest{
-			VolumeId:       uint32(volumeId),
-			SourceDataNode: sourceVolumeServer,
-			DiskType:       diskType,
+	err = operation.WithVolumeServerClient(true, targetVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+		stream, replicateErr := volumeServerClient.VolumeCopy(context.Background(), &volume_server_pb.VolumeCopyRequest{
+			VolumeId:        uint32(volumeId),
+			SourceDataNode:  string(sourceVolumeServer),
+			DiskType:        diskType,
+			IoBytePerSecond: ioBytePerSecond,
 		})
-		if replicateErr == nil {
-			lastAppendAtNs = resp.LastAppendAtNs
+		if replicateErr != nil {
+			return replicateErr
 		}
-		return replicateErr
+		for {
+			resp, recvErr := stream.Recv()
+			if recvErr != nil {
+				if recvErr == io.EOF {
+					break
+				} else {
+					return recvErr
+				}
+			}
+			if resp.LastAppendAtNs != 0 {
+				lastAppendAtNs = resp.LastAppendAtNs
+			} else {
+				fmt.Fprintf(writer, "volume %d processed %d bytes\n", volumeId, resp.ProcessedBytes)
+			}
+		}
+
+		return nil
 	})
 
 	return
 }
 
-func tailVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer string, lastAppendAtNs uint64, idleTimeout time.Duration) (err error) {
+func tailVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer, targetVolumeServer pb.ServerAddress, lastAppendAtNs uint64, idleTimeout time.Duration) (err error) {
 
-	return operation.WithVolumeServerClient(targetVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+	return operation.WithVolumeServerClient(true, targetVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 		_, replicateErr := volumeServerClient.VolumeTailReceiver(context.Background(), &volume_server_pb.VolumeTailReceiverRequest{
 			VolumeId:           uint32(volumeId),
 			SinceNs:            lastAppendAtNs,
 			IdleTimeoutSeconds: uint32(idleTimeout.Seconds()),
-			SourceVolumeServer: sourceVolumeServer,
+			SourceVolumeServer: string(sourceVolumeServer),
 		})
 		return replicateErr
 	})
 
 }
 
-func deleteVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer string) (err error) {
-	return operation.WithVolumeServerClient(sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+func deleteVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer pb.ServerAddress) (err error) {
+	return operation.WithVolumeServerClient(false, sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 		_, deleteErr := volumeServerClient.VolumeDelete(context.Background(), &volume_server_pb.VolumeDeleteRequest{
 			VolumeId: uint32(volumeId),
 		})
@@ -177,8 +196,8 @@ func deleteVolume(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sour
 	})
 }
 
-func markVolumeWritable(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer string, writable bool) (err error) {
-	return operation.WithVolumeServerClient(sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+func markVolumeWritable(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, sourceVolumeServer pb.ServerAddress, writable bool) (err error) {
+	return operation.WithVolumeServerClient(false, sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 		if writable {
 			_, err = volumeServerClient.VolumeMarkWritable(context.Background(), &volume_server_pb.VolumeMarkWritableRequest{
 				VolumeId: uint32(volumeId),
@@ -195,7 +214,7 @@ func markVolumeWritable(grpcDialOption grpc.DialOption, volumeId needle.VolumeId
 func markVolumeReplicasWritable(grpcDialOption grpc.DialOption, volumeId needle.VolumeId, locations []wdclient.Location, writable bool) error {
 	for _, location := range locations {
 		fmt.Printf("markVolumeReadonly %d on %s ...\n", volumeId, location.Url)
-		if err := markVolumeWritable(grpcDialOption, volumeId, location.Url, writable); err != nil {
+		if err := markVolumeWritable(grpcDialOption, volumeId, location.ServerAddress(), writable); err != nil {
 			return err
 		}
 	}

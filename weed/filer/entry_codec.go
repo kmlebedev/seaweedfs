@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 )
 
 func (entry *Entry) EncodeAttributesAndChunks() ([]byte, error) {
@@ -21,7 +21,7 @@ func (entry *Entry) DecodeAttributesAndChunks(blob []byte) error {
 
 	message := &filer_pb.Entry{}
 
-	if err := proto.UnmarshalMerge(blob, message); err != nil {
+	if err := proto.Unmarshal(blob, message); err != nil {
 		return fmt.Errorf("decoding value blob for %s: %v", entry.FullPath, err)
 	}
 
@@ -39,15 +39,14 @@ func EntryAttributeToPb(entry *Entry) *filer_pb.FuseAttributes {
 		Uid:           entry.Uid,
 		Gid:           entry.Gid,
 		Mime:          entry.Mime,
-		Collection:    entry.Attr.Collection,
-		Replication:   entry.Attr.Replication,
 		TtlSec:        entry.Attr.TtlSec,
-		DiskType:      entry.Attr.DiskType,
 		UserName:      entry.Attr.UserName,
 		GroupName:     entry.Attr.GroupNames,
 		SymlinkTarget: entry.Attr.SymlinkTarget,
 		Md5:           entry.Attr.Md5,
 		FileSize:      entry.Attr.FileSize,
+		Rdev:          entry.Attr.Rdev,
+		Inode:         entry.Attr.Inode,
 	}
 }
 
@@ -65,15 +64,14 @@ func PbToEntryAttribute(attr *filer_pb.FuseAttributes) Attr {
 	t.Uid = attr.Uid
 	t.Gid = attr.Gid
 	t.Mime = attr.Mime
-	t.Collection = attr.Collection
-	t.Replication = attr.Replication
 	t.TtlSec = attr.TtlSec
-	t.DiskType = attr.DiskType
 	t.UserName = attr.UserName
 	t.GroupNames = attr.GroupName
 	t.SymlinkTarget = attr.SymlinkTarget
 	t.Md5 = attr.Md5
 	t.FileSize = attr.FileSize
+	t.Rdev = attr.Rdev
+	t.Inode = attr.Inode
 
 	return t
 }
@@ -116,6 +114,9 @@ func EqualEntry(a, b *Entry) bool {
 		return false
 	}
 	if !proto.Equal(a.Remote, b.Remote) {
+		return false
+	}
+	if a.Quota != b.Quota {
 		return false
 	}
 	return true

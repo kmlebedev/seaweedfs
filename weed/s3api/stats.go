@@ -1,8 +1,8 @@
 package s3api
 
 import (
-	stats_collect "github.com/chrislusf/seaweedfs/weed/stats"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
+	stats_collect "github.com/seaweedfs/seaweedfs/weed/stats"
 	"net/http"
 	"strconv"
 	"time"
@@ -28,11 +28,18 @@ func (r *StatusRecorder) Flush() {
 
 func track(f http.HandlerFunc, action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Server", "SeaweedFS S3 "+util.VERSION)
+		bucket, _ := s3_constants.GetBucketAndObject(r)
+		w.Header().Set("Server", "SeaweedFS S3")
 		recorder := NewStatusResponseWriter(w)
 		start := time.Now()
 		f(recorder, r)
-		stats_collect.S3RequestHistogram.WithLabelValues(action).Observe(time.Since(start).Seconds())
-		stats_collect.S3RequestCounter.WithLabelValues(action, strconv.Itoa(recorder.Status)).Inc()
+		if recorder.Status == http.StatusForbidden {
+			if m, _ := stats_collect.S3RequestCounter.GetMetricWithLabelValues(
+				action, strconv.Itoa(http.StatusOK), bucket); m == nil {
+				bucket = ""
+			}
+		}
+		stats_collect.S3RequestHistogram.WithLabelValues(action, bucket).Observe(time.Since(start).Seconds())
+		stats_collect.S3RequestCounter.WithLabelValues(action, strconv.Itoa(recorder.Status), bucket).Inc()
 	}
 }

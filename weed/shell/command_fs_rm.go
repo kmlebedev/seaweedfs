@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -37,10 +37,10 @@ func (c *commandFsRm) Help() string {
 func (c *commandFsRm) Do(args []string, commandEnv *CommandEnv, writer io.Writer) (err error) {
 	isRecursive := false
 	ignoreRecursiveError := false
-	var entiries []string
+	var entries []string
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
-			entiries = append(entiries, arg)
+			entries = append(entries, arg)
 			continue
 		}
 		for _, t := range arg {
@@ -52,12 +52,12 @@ func (c *commandFsRm) Do(args []string, commandEnv *CommandEnv, writer io.Writer
 			}
 		}
 	}
-	if len(entiries) < 1 {
+	if len(entries) < 1 {
 		return fmt.Errorf("need to have arguments")
 	}
 
-	commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
-		for _, entry := range entiries {
+	commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+		for _, entry := range entries {
 			targetPath, err := commandEnv.parseUrl(entry)
 			if err != nil {
 				fmt.Fprintf(writer, "rm: %s: %v\n", targetPath, err)

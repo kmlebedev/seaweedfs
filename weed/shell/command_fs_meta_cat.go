@@ -2,14 +2,12 @@ package shell
 
 import (
 	"fmt"
-	"github.com/golang/protobuf/proto"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"google.golang.org/protobuf/proto"
 	"io"
-	"sort"
 
-	"github.com/golang/protobuf/jsonpb"
-
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -40,7 +38,7 @@ func (c *commandFsMetaCat) Do(args []string, commandEnv *CommandEnv, writer io.W
 
 	dir, name := util.FullPath(path).DirAndName()
 
-	return commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	return commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 
 		request := &filer_pb.LookupDirectoryEntryRequest{
 			Name:      name,
@@ -51,24 +49,7 @@ func (c *commandFsMetaCat) Do(args []string, commandEnv *CommandEnv, writer io.W
 			return err
 		}
 
-		m := jsonpb.Marshaler{
-			EmitDefaults: true,
-			Indent:       "  ",
-		}
-
-		sort.Slice(respLookupEntry.Entry.Chunks, func(i, j int) bool {
-			if respLookupEntry.Entry.Chunks[i].Offset == respLookupEntry.Entry.Chunks[j].Offset {
-				return respLookupEntry.Entry.Chunks[i].Mtime < respLookupEntry.Entry.Chunks[j].Mtime
-			}
-			return respLookupEntry.Entry.Chunks[i].Offset < respLookupEntry.Entry.Chunks[j].Offset
-		})
-
-		text, marshalErr := m.MarshalToString(respLookupEntry.Entry)
-		if marshalErr != nil {
-			return fmt.Errorf("marshal meta: %v", marshalErr)
-		}
-
-		fmt.Fprintf(writer, "%s\n", text)
+		filer.ProtoToText(writer, respLookupEntry.Entry)
 
 		bytes, _ := proto.Marshal(respLookupEntry.Entry)
 		gzippedBytes, _ := util.GzipData(bytes)

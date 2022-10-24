@@ -15,7 +15,7 @@ public class VolumeIdCache {
         }
         this.cache = CacheBuilder.newBuilder()
                 .maximumSize(maxEntries)
-                .expireAfterAccess(5, TimeUnit.MINUTES)
+                .expireAfterWrite(5, TimeUnit.MINUTES)
                 .build();
     }
 
@@ -24,6 +24,13 @@ public class VolumeIdCache {
             return null;
         }
         return this.cache.getIfPresent(volumeId);
+    }
+
+    public void clearLocations(String volumeId) {
+        if (this.cache == null) {
+            return;
+        }
+        this.cache.invalidate(volumeId);
     }
 
     public void setLocations(String volumeId, FilerProto.Locations locations) {

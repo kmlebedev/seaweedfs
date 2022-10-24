@@ -1,10 +1,10 @@
 package command
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/storage"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -50,7 +50,7 @@ func runCompact(cmd *Command, args []string) bool {
 			glog.Fatalf("Compact Volume [ERROR] %s\n", err)
 		}
 	} else {
-		if err = v.Compact2(preallocate, 0); err != nil {
+		if err = v.Compact2(preallocate, 0, nil); err != nil {
 			glog.Fatalf("Compact Volume [ERROR] %s\n", err)
 		}
 	}

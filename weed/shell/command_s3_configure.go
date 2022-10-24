@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
 	"io"
 	"sort"
 	"strings"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/iam_pb"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/iam_pb"
 )
 
 func init() {
@@ -42,14 +43,13 @@ func (c *commandS3Configure) Do(args []string, commandEnv *CommandEnv, writer io
 	secretKey := s3ConfigureCommand.String("secret_key", "", "specify the secret key")
 	isDelete := s3ConfigureCommand.Bool("delete", false, "delete users, actions or access keys")
 	apply := s3ConfigureCommand.Bool("apply", false, "update and apply s3 configuration")
-
 	if err = s3ConfigureCommand.Parse(args); err != nil {
 		return nil
 	}
 
 	var buf bytes.Buffer
-	if err = commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
-		return filer.ReadEntry(commandEnv.MasterClient, client, filer.IamConfigDirecotry, filer.IamIdentityFile, &buf)
+	if err = commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+		return filer.ReadEntry(commandEnv.MasterClient, client, filer.IamConfigDirectory, filer.IamIdentityFile, &buf)
 	}); err != nil && err != filer_pb.ErrNotFound {
 		return err
 	}
@@ -83,6 +83,7 @@ func (c *commandS3Configure) Do(args []string, commandEnv *CommandEnv, writer io
 		}
 	}
 	if changed {
+		infoAboutSimulationMode(writer, *apply, "-apply")
 		if *isDelete {
 			var exists []int
 			for _, cmdAction := range cmdActions {
@@ -151,6 +152,7 @@ func (c *commandS3Configure) Do(args []string, commandEnv *CommandEnv, writer io
 			}
 		}
 	} else if *user != "" && *actions != "" {
+		infoAboutSimulationMode(writer, *apply, "-apply")
 		identity := iam_pb.Identity{
 			Name:        *user,
 			Actions:     cmdActions,
@@ -163,6 +165,10 @@ func (c *commandS3Configure) Do(args []string, commandEnv *CommandEnv, writer io
 		s3cfg.Identities = append(s3cfg.Identities, &identity)
 	}
 
+	if err = filer.CheckDuplicateAccessKey(s3cfg); err != nil {
+		return err
+	}
+
 	buf.Reset()
 	filer.ProtoToText(&buf, s3cfg)
 
@@ -171,8 +177,8 @@ func (c *commandS3Configure) Do(args []string, commandEnv *CommandEnv, writer io
 
 	if *apply {
 
-		if err := commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
-			return filer.SaveInsideFiler(client, filer.IamConfigDirecotry, filer.IamIdentityFile, buf.Bytes())
+		if err := commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+			return filer.SaveInsideFiler(client, filer.IamConfigDirectory, filer.IamIdentityFile, buf.Bytes())
 		}); err != nil {
 			return err
 		}

@@ -3,15 +3,16 @@ package topology
 import (
 	"errors"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/storage"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/super_block"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/super_block"
 )
 
 type copyState int
@@ -103,6 +104,8 @@ func (v *volumesBinaryState) copyState(list *VolumeLocationList) copyState {
 
 // mapping from volume to its locations, inverted from server to volume
 type VolumeLayout struct {
+	growRequestCount int32
+	growRequestTime  time.Time
 	rp               *super_block.ReplicaPlacement
 	ttl              *needle.TTL
 	diskType         types.DiskType
@@ -138,9 +141,7 @@ func NewVolumeLayout(rp *super_block.ReplicaPlacement, ttl *needle.TTL, diskType
 }
 
 func (vl *VolumeLayout) String() string {
-	vl.accessLock.RLock()
-	defer vl.accessLock.RUnlock()
-	return fmt.Sprintf("rp:%v, ttl:%v, vid2location:%v, writables:%v, volumeSizeLimit:%v", vl.rp, vl.ttl, vl.vid2location, vl.writables, vl.volumeSizeLimit)
+	return fmt.Sprintf("rp:%v, ttl:%v, writables:%v, volumeSizeLimit:%v", vl.rp, vl.ttl, vl.writables, vl.volumeSizeLimit)
 }
 
 func (vl *VolumeLayout) RegisterVolume(v *storage.VolumeInfo, dn *DataNode) {
@@ -218,6 +219,13 @@ func (vl *VolumeLayout) ensureCorrectWritables(vid needle.VolumeId) {
 			vl.setVolumeWritable(vid)
 		}
 	} else {
+		if !vl.enoughCopies(vid) {
+			glog.V(0).Infof("volume %d does not have enough copies", vid)
+		}
+		if !vl.isAllWritable(vid) {
+			glog.V(0).Infof("volume %d are not all writable", vid)
+		}
+		glog.V(0).Infof("volume %d remove from writable", vid)
 		vl.removeFromWritable(vid)
 	}
 }
@@ -279,7 +287,7 @@ func (vl *VolumeLayout) PickForWrite(count uint64, option *VolumeGrowOption) (*n
 		//glog.V(0).Infoln("No more writable volumes!")
 		return nil, 0, nil, errors.New("No more writable volumes!")
 	}
-	if option.DataCenter == "" {
+	if option.DataCenter == "" && option.Rack == "" && option.DataNode == "" {
 		vid := vl.writables[rand.Intn(lenWriters)]
 		locationList := vl.vid2location[vid]
 		if locationList != nil {
@@ -293,21 +301,44 @@ func (vl *VolumeLayout) PickForWrite(count uint64, option *VolumeGrowOption) (*n
 	for _, v := range vl.writables {
 		volumeLocationList := vl.vid2location[v]
 		for _, dn := range volumeLocationList.list {
-			if dn.GetDataCenter().Id() == NodeId(option.DataCenter) {
-				if option.Rack != "" && dn.GetRack().Id() != NodeId(option.Rack) {
-					continue
-				}
-				if option.DataNode != "" && dn.Id() != NodeId(option.DataNode) {
-					continue
-				}
-				counter++
-				if rand.Intn(counter) < 1 {
-					vid, locationList = v, volumeLocationList
-				}
+			if option.DataCenter != "" && dn.GetDataCenter().Id() != NodeId(option.DataCenter) {
+				continue
+			}
+			if option.Rack != "" && dn.GetRack().Id() != NodeId(option.Rack) {
+				continue
+			}
+			if option.DataNode != "" && dn.Id() != NodeId(option.DataNode) {
+				continue
+			}
+			counter++
+			if rand.Intn(counter) < 1 {
+				vid, locationList = v, volumeLocationList.Copy()
 			}
 		}
 	}
 	return &vid, count, locationList, nil
+}
+
+func (vl *VolumeLayout) HasGrowRequest() bool {
+	if atomic.LoadInt32(&vl.growRequestCount) > 0 &&
+		vl.growRequestTime.Add(time.Minute).After(time.Now()) {
+		return true
+	}
+	return false
+}
+func (vl *VolumeLayout) AddGrowRequest() {
+	vl.growRequestTime = time.Now()
+	atomic.AddInt32(&vl.growRequestCount, 1)
+}
+func (vl *VolumeLayout) DoneGrowRequest() {
+	vl.growRequestTime = time.Unix(0, 0)
+	atomic.StoreInt32(&vl.growRequestCount, 0)
+}
+
+func (vl *VolumeLayout) ShouldGrowVolumes(option *VolumeGrowOption) bool {
+	active, crowded := vl.GetActiveVolumeCount(option)
+	//glog.V(0).Infof("active volume: %d, high usage volume: %d\n", active, high)
+	return active <= crowded
 }
 
 func (vl *VolumeLayout) GetActiveVolumeCount(option *VolumeGrowOption) (active, crowded int) {
@@ -411,8 +442,11 @@ func (vl *VolumeLayout) SetVolumeCapacityFull(vid needle.VolumeId) bool {
 	vl.accessLock.Lock()
 	defer vl.accessLock.Unlock()
 
-	// glog.V(0).Infoln("Volume", vid, "reaches full capacity.")
-	return vl.removeFromWritable(vid)
+	wasWritable := vl.removeFromWritable(vid)
+	if wasWritable {
+		glog.V(0).Infof("Volume %d reaches full capacity.", vid)
+	}
+	return wasWritable
 }
 
 func (vl *VolumeLayout) removeFromCrowded(vid needle.VolumeId) {
@@ -441,13 +475,19 @@ func (vl *VolumeLayout) SetVolumeCrowded(vid needle.VolumeId) {
 	}
 }
 
-func (vl *VolumeLayout) ToMap() map[string]interface{} {
-	m := make(map[string]interface{})
-	m["replication"] = vl.rp.String()
-	m["ttl"] = vl.ttl.String()
-	m["writables"] = vl.writables
+type VolumeLayoutInfo struct {
+	Replication string            `json:"replication"`
+	TTL         string            `json:"ttl"`
+	Writables   []needle.VolumeId `json:"writables"`
+	Collection  string            `json:"collection"`
+}
+
+func (vl *VolumeLayout) ToInfo() (info VolumeLayoutInfo) {
+	info.Replication = vl.rp.String()
+	info.TTL = vl.ttl.String()
+	info.Writables = vl.writables
 	//m["locations"] = vl.vid2location
-	return m
+	return
 }
 
 func (vl *VolumeLayout) Stats() *VolumeLayoutStats {
@@ -461,9 +501,9 @@ func (vl *VolumeLayout) Stats() *VolumeLayoutStats {
 	for vid, vll := range vl.vid2location {
 		size, fileCount := vll.Stats(vid, freshThreshold)
 		ret.FileCount += uint64(fileCount)
-		ret.UsedSize += size
+		ret.UsedSize += size * uint64(vll.Length())
 		if vl.readonlyVolumes.IsTrue(vid) {
-			ret.TotalSize += size
+			ret.TotalSize += size * uint64(vll.Length())
 		} else {
 			ret.TotalSize += vl.volumeSizeLimit * uint64(vll.Length())
 		}

@@ -1,14 +1,17 @@
+//go:build elastic
+// +build elastic
+
 package elastic
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
 	jsoniter "github.com/json-iterator/go"
 	elastic "github.com/olivere/elastic/v7"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
 )
 
 func (store *ElasticStore) KvDelete(ctx context.Context, key []byte) (err error) {

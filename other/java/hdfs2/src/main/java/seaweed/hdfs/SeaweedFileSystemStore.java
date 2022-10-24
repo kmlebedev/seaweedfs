@@ -27,9 +27,8 @@ public class SeaweedFileSystemStore {
     private FilerClient filerClient;
     private Configuration conf;
 
-    public SeaweedFileSystemStore(String host, int port, Configuration conf) {
-        int grpcPort = 10000 + port;
-        filerClient = new FilerClient(host, grpcPort);
+    public SeaweedFileSystemStore(String host, int port, int grpcPort, Configuration conf) {
+        filerClient = new FilerClient(host, port, grpcPort);
         this.conf = conf;
         String volumeServerAccessMode = this.conf.get(FS_SEAWEED_VOLUME_SERVER_ACCESS, "direct");
         if (volumeServerAccessMode.equals("publicUrl")) {
@@ -201,7 +200,6 @@ public class SeaweedFileSystemStore {
                 entry.getAttributesBuilder().setMtime(now);
                 LOG.debug("createFile merged entry path:{} entry:{} from:{}", path, entry, existingEntry);
                 writePosition = SeaweedRead.fileSize(existingEntry);
-                replication = existingEntry.getAttributes().getReplication();
             }
         }
         if (entry == null) {
@@ -210,7 +208,6 @@ public class SeaweedFileSystemStore {
                 .setIsDirectory(false)
                 .setAttributes(FilerProto.FuseAttributes.newBuilder()
                     .setFileMode(permissionToMode(permission, false))
-                    .setReplication(replication)
                     .setCrtime(now)
                     .setMtime(now)
                     .setUserName(userGroupInformation.getUserName())

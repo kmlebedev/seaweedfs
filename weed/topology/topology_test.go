@@ -1,12 +1,12 @@
 package topology
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
-	"github.com/chrislusf/seaweedfs/weed/sequence"
-	"github.com/chrislusf/seaweedfs/weed/storage"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/super_block"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/sequence"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/super_block"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 
 	"testing"
 )
@@ -31,7 +31,7 @@ func TestHandlingVolumeServerHeartbeat(t *testing.T) {
 	maxVolumeCounts := make(map[string]uint32)
 	maxVolumeCounts[""] = 25
 	maxVolumeCounts["ssd"] = 12
-	dn := rack.GetOrCreateDataNode("127.0.0.1", 34534, "127.0.0.1", maxVolumeCounts)
+	dn := rack.GetOrCreateDataNode("127.0.0.1", 34534, 0, "127.0.0.1", maxVolumeCounts)
 
 	{
 		volumeCount := 7
@@ -177,7 +177,7 @@ func TestAddRemoveVolume(t *testing.T) {
 	maxVolumeCounts := make(map[string]uint32)
 	maxVolumeCounts[""] = 25
 	maxVolumeCounts["ssd"] = 12
-	dn := rack.GetOrCreateDataNode("127.0.0.1", 34534, "127.0.0.1", maxVolumeCounts)
+	dn := rack.GetOrCreateDataNode("127.0.0.1", 34534, 0, "127.0.0.1", maxVolumeCounts)
 
 	v := storage.VolumeInfo{
 		Id:               needle.VolumeId(1),

@@ -5,9 +5,9 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/chrislusf/seaweedfs/weed/storage/idx"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
-	"github.com/willf/bloom"
+	"github.com/seaweedfs/seaweedfs/weed/storage/idx"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
+	boom "github.com/tylertreat/BoomFilters"
 )
 
 type mapMetric struct {
@@ -91,12 +91,11 @@ func (mm *mapMetric) MaybeSetMaxFileKey(key NeedleId) {
 	}
 }
 
-func newNeedleMapMetricFromIndexFile(r *os.File) (mm *mapMetric, err error) {
-	mm = &mapMetric{}
-	var bf *bloom.BloomFilter
+func needleMapMetricFromIndexFile(r *os.File, mm *mapMetric) error {
+	var bf *boom.BloomFilter
 	buf := make([]byte, NeedleIdSize)
-	err = reverseWalkIndexFile(r, func(entryCount int64) {
-		bf = bloom.NewWithEstimates(uint(entryCount), 0.001)
+	err := reverseWalkIndexFile(r, func(entryCount int64) {
+		bf = boom.NewBloomFilter(uint(entryCount), 0.001)
 	}, func(key NeedleId, offset Offset, size Size) error {
 
 		mm.MaybeSetMaxFileKey(key)
@@ -105,9 +104,12 @@ func newNeedleMapMetricFromIndexFile(r *os.File) (mm *mapMetric, err error) {
 			mm.FileByteCounter += uint64(size)
 		}
 
-		if !bf.Test(buf) {
-			mm.FileCounter++
-			bf.Add(buf)
+		mm.FileCounter++
+		if !bf.TestAndAdd(buf) {
+			// if !size.IsValid(), then this file is deleted already
+			if !size.IsValid() {
+				mm.DeletionCounter++
+			}
 		} else {
 			// deleted file
 			mm.DeletionCounter++
@@ -118,6 +120,12 @@ func newNeedleMapMetricFromIndexFile(r *os.File) (mm *mapMetric, err error) {
 		}
 		return nil
 	})
+	return err
+}
+
+func newNeedleMapMetricFromIndexFile(r *os.File) (mm *mapMetric, err error) {
+	mm = &mapMetric{}
+	err = needleMapMetricFromIndexFile(r, mm)
 	return
 }
 

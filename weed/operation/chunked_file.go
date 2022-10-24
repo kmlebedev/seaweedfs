@@ -5,15 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"sort"
 	"sync"
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 var (
@@ -42,7 +42,7 @@ type ChunkManifest struct {
 type ChunkedFileReader struct {
 	totalSize      int64
 	chunkList      []*ChunkInfo
-	master         string
+	master         pb.ServerAddress
 	pos            int64
 	pr             *io.PipeReader
 	pw             *io.PipeWriter
@@ -106,10 +106,7 @@ func readChunkNeedle(fileUrl string, w io.Writer, offset int64, jwt string) (wri
 	if err != nil {
 		return written, err
 	}
-	defer func() {
-		io.Copy(ioutil.Discard, resp.Body)
-		resp.Body.Close()
-	}()
+	defer util.CloseResponse(resp)
 
 	switch resp.StatusCode {
 	case http.StatusRequestedRangeNotSatisfiable:
@@ -127,7 +124,7 @@ func readChunkNeedle(fileUrl string, w io.Writer, offset int64, jwt string) (wri
 	return io.Copy(w, resp.Body)
 }
 
-func NewChunkedFileReader(chunkList []*ChunkInfo, master string, grpcDialOption grpc.DialOption) *ChunkedFileReader {
+func NewChunkedFileReader(chunkList []*ChunkInfo, master pb.ServerAddress, grpcDialOption grpc.DialOption) *ChunkedFileReader {
 	var totalSize int64
 	for _, chunk := range chunkList {
 		totalSize += chunk.Size
@@ -176,7 +173,7 @@ func (cf *ChunkedFileReader) WriteTo(w io.Writer) (n int64, err error) {
 	for ; chunkIndex < len(cf.chunkList); chunkIndex++ {
 		ci := cf.chunkList[chunkIndex]
 		// if we need read date from local volume server first?
-		fileUrl, jwt, lookupError := LookupFileId(func() string {
+		fileUrl, jwt, lookupError := LookupFileId(func() pb.ServerAddress {
 			return cf.master
 		}, cf.grpcDialOption, ci.Fid)
 		if lookupError != nil {

@@ -3,6 +3,7 @@ package command
 import (
 	"bufio"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
 	"io"
 	"math"
 	"math/rand"
@@ -10,17 +11,16 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/security"
-	"github.com/chrislusf/seaweedfs/weed/util"
-	"github.com/chrislusf/seaweedfs/weed/wdclient"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/security"
+	"github.com/seaweedfs/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/wdclient"
 )
 
 type BenchmarkOptions struct {
@@ -41,7 +41,6 @@ type BenchmarkOptions struct {
 	grpcDialOption   grpc.DialOption
 	masterClient     *wdclient.MasterClient
 	fsync            *bool
-	useTcp           *bool
 }
 
 var (
@@ -68,20 +67,19 @@ func init() {
 	b.cpuprofile = cmdBenchmark.Flag.String("cpuprofile", "", "cpu profile output file")
 	b.maxCpu = cmdBenchmark.Flag.Int("maxCpu", 0, "maximum number of CPUs. 0 means all available CPUs")
 	b.fsync = cmdBenchmark.Flag.Bool("fsync", false, "flush data to disk after write")
-	b.useTcp = cmdBenchmark.Flag.Bool("useTcp", false, "send data via tcp")
 	sharedBytes = make([]byte, 1024)
 }
 
 var cmdBenchmark = &Command{
 	UsageLine: "benchmark -master=localhost:9333 -c=10 -n=100000",
-	Short:     "benchmark on writing millions of files and read out",
+	Short:     "benchmark by writing millions of files and reading them out",
 	Long: `benchmark on an empty SeaweedFS file system.
 
   Two tests during benchmark:
   1) write lots of small files to the system
   2) read the files out
 
-  The file content is mostly zero, but no compression is done.
+  The file content is mostly zeros, but no compression is done.
 
   You can choose to only benchmark read or write.
   During write, the list of uploaded file ids is stored in "-list" specified file.
@@ -129,7 +127,7 @@ func runBenchmark(cmd *Command, args []string) bool {
 		defer pprof.StopCPUProfile()
 	}
 
-	b.masterClient = wdclient.NewMasterClient(b.grpcDialOption, "client", "", 0, "", strings.Split(*b.masters, ","))
+	b.masterClient = wdclient.NewMasterClient(b.grpcDialOption, "", "client", "", "", "", pb.ServerAddresses(*b.masters).ToAddressMap())
 	go b.masterClient.KeepConnectedToMaster()
 	b.masterClient.WaitUntilConnected()
 
@@ -225,8 +223,6 @@ func writeFiles(idChan chan int, fileIdLineChan chan string, s *stat) {
 
 	random := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	volumeTcpClient := wdclient.NewVolumeTcpClient()
-
 	for id := range idChan {
 		start := time.Now()
 		fileSize := int64(*b.fileSize + random.Intn(64))
@@ -247,15 +243,7 @@ func writeFiles(idChan chan int, fileIdLineChan chan string, s *stat) {
 			if !isSecure && assignResult.Auth != "" {
 				isSecure = true
 			}
-			if *b.useTcp {
-				if uploadByTcp(volumeTcpClient, fp) {
-					fileIdLineChan <- fp.Fid
-					s.completed++
-					s.transferred += fileSize
-				} else {
-					s.failed++
-				}
-			} else if _, err := fp.Upload(0, b.masterClient.GetMaster, false, assignResult.Auth, b.grpcDialOption); err == nil {
+			if _, err := fp.Upload(0, b.masterClient.GetMaster, false, assignResult.Auth, b.grpcDialOption); err == nil {
 				if random.Intn(100) < *b.deletePercentage {
 					s.total++
 					delayedDeleteChan <- &delayedFile{time.Now().Add(time.Second), fp}
@@ -339,17 +327,6 @@ func writeFileIds(fileName string, fileIdLineChan chan string, finishChan chan b
 			file.Write([]byte("\n"))
 		}
 	}
-}
-
-func uploadByTcp(volumeTcpClient *wdclient.VolumeTcpClient, fp *operation.FilePart) bool {
-
-	err := volumeTcpClient.PutFileChunk(fp.Server, fp.Fid, uint32(fp.FileSize), fp.Reader)
-	if err != nil {
-		glog.Errorf("upload chunk err: %v", err)
-		return false
-	}
-
-	return true
 }
 
 func readFileIds(fileName string, fileIdLineChan chan string) {
@@ -468,7 +445,7 @@ func (s *stats) printStats() {
 	timeTaken := float64(int64(s.end.Sub(s.start))) / 1000000000
 	fmt.Printf("\nConcurrency Level:      %d\n", *b.concurrency)
 	fmt.Printf("Time taken for tests:   %.3f seconds\n", timeTaken)
-	fmt.Printf("Complete requests:      %d\n", completed)
+	fmt.Printf("Completed requests:      %d\n", completed)
 	fmt.Printf("Failed requests:        %d\n", failed)
 	fmt.Printf("Total transferred:      %d bytes\n", transferred)
 	fmt.Printf("Requests per second:    %.2f [#/sec]\n", float64(completed)/timeTaken)

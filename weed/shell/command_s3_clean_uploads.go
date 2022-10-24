@@ -3,12 +3,14 @@ package shell
 import (
 	"flag"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
+	"github.com/seaweedfs/seaweedfs/weed/security"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 	"io"
 	"math"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 )
 
 func init() {
@@ -39,6 +41,8 @@ func (c *commandS3CleanUploads) Do(args []string, commandEnv *CommandEnv, writer
 		return nil
 	}
 
+	signingKey := util.GetViper().GetString("jwt.signing.key")
+
 	var filerBucketsPath string
 	filerBucketsPath, err = readFilerBucketsPath(commandEnv)
 	if err != nil {
@@ -55,15 +59,17 @@ func (c *commandS3CleanUploads) Do(args []string, commandEnv *CommandEnv, writer
 	}
 
 	for _, bucket := range buckets {
-		c.cleanupUploads(commandEnv, writer, filerBucketsPath, bucket, *uploadedTimeAgo)
+		if err := c.cleanupUploads(commandEnv, writer, filerBucketsPath, bucket, *uploadedTimeAgo, signingKey); err != nil {
+			fmt.Fprintf(writer, fmt.Sprintf("failed cleanup uploads for bucket %s: %v", bucket, err))
+		}
 	}
 
 	return err
 
 }
 
-func (c *commandS3CleanUploads) cleanupUploads(commandEnv *CommandEnv, writer io.Writer, filerBucketsPath string, bucket string, timeAgo time.Duration) error {
-	uploadsDir := filerBucketsPath + "/" + bucket + "/.uploads"
+func (c *commandS3CleanUploads) cleanupUploads(commandEnv *CommandEnv, writer io.Writer, filerBucketsPath string, bucket string, timeAgo time.Duration, signingKey string) error {
+	uploadsDir := filerBucketsPath + "/" + bucket + "/" + s3_constants.MultipartUploadsFolder
 	var staleUploads []string
 	now := time.Now()
 	err := filer_pb.List(commandEnv, uploadsDir, "", func(entry *filer_pb.Entry, isLast bool) error {
@@ -77,12 +83,17 @@ func (c *commandS3CleanUploads) cleanupUploads(commandEnv *CommandEnv, writer io
 		return fmt.Errorf("list uploads under %v: %v", uploadsDir, err)
 	}
 
+	var encodedJwt security.EncodedJwt
+	if signingKey != "" {
+		encodedJwt = security.GenJwtForFilerServer(security.SigningKey(signingKey), 15*60)
+	}
+
 	for _, staleUpload := range staleUploads {
-		deleteUrl := fmt.Sprintf("http://%s:%d%s/%s?recursive=true&ignoreRecursiveError=true", commandEnv.option.FilerHost, commandEnv.option.FilerPort, uploadsDir, staleUpload)
+		deleteUrl := fmt.Sprintf("http://%s%s/%s?recursive=true&ignoreRecursiveError=true", commandEnv.option.FilerAddress.ToHttpAddress(), uploadsDir, staleUpload)
 		fmt.Fprintf(writer, "purge %s\n", deleteUrl)
 
-		err = util.Delete(deleteUrl, "")
-		if err != nil {
+		err = util.Delete(deleteUrl, string(encodedJwt))
+		if err != nil && err.Error() != "" {
 			return fmt.Errorf("purge %s/%s: %v", uploadsDir, staleUpload, err)
 		}
 	}

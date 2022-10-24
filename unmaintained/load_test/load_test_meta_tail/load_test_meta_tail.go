@@ -3,19 +3,21 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"strconv"
 	"time"
 )
 
 var (
-	dir       = flag.String("dir", "/tmp", "directory to create files")
-	n         = flag.Int("n", 100, "the number of metadata")
-	tailFiler = flag.String("filer", "localhost:8888", "the filer address")
-	isWrite   = flag.Bool("write", false, "only write")
+	dir           = flag.String("dir", "/tmp", "directory to create files")
+	n             = flag.Int("n", 100, "the number of metadata")
+	tailFiler     = flag.String("filer", "localhost:8888", "the filer address")
+	isWrite       = flag.Bool("write", false, "only write")
+	writeInterval = flag.Duration("writeInterval", 0, "write interval, e.g., 1s")
 )
 
 func main() {
@@ -50,10 +52,11 @@ func main() {
 }
 
 func startGenerateMetadata() {
-	pb.WithFilerClient(*tailFiler, grpc.WithInsecure(), func(client filer_pb.SeaweedFilerClient) error {
+	pb.WithFilerClient(false, pb.ServerAddress(*tailFiler), grpc.WithTransportCredentials(insecure.NewCredentials()), func(client filer_pb.SeaweedFilerClient) error {
 
 		for i := 0; i < *n; i++ {
 			name := fmt.Sprintf("file%d", i)
+			glog.V(0).Infof("write %s/%s", *dir, name)
 			if err := filer_pb.CreateEntry(client, &filer_pb.CreateEntryRequest{
 				Directory: *dir,
 				Entry: &filer_pb.Entry{
@@ -62,6 +65,9 @@ func startGenerateMetadata() {
 			}); err != nil {
 				fmt.Printf("create entry %s: %v\n", name, err)
 				return err
+			}
+			if *writeInterval > 0 {
+				time.Sleep(*writeInterval)
 			}
 		}
 
@@ -72,8 +78,7 @@ func startGenerateMetadata() {
 
 func startSubscribeMetadata(eachEntryFunc func(event *filer_pb.SubscribeMetadataResponse) error) {
 
-	tailErr := pb.FollowMetadata(*tailFiler, grpc.WithInsecure(),	"tail",
-		*dir, 0, 0, eachEntryFunc, false)
+	tailErr := pb.FollowMetadata(pb.ServerAddress(*tailFiler), grpc.WithTransportCredentials(insecure.NewCredentials()), "tail", 0, 0, *dir, nil, 0, 0, 0, eachEntryFunc, pb.TrivialOnError)
 
 	if tailErr != nil {
 		fmt.Printf("tail %s: %v\n", *tailFiler, tailErr)

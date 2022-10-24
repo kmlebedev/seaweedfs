@@ -1,15 +1,16 @@
 package weed_server
 
 import (
+	"github.com/seaweedfs/seaweedfs/weed/pb"
 	"net/http"
 	"path/filepath"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	ui "github.com/chrislusf/seaweedfs/weed/server/volume_server_ui"
-	"github.com/chrislusf/seaweedfs/weed/stats"
-	"github.com/chrislusf/seaweedfs/weed/storage"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	ui "github.com/seaweedfs/seaweedfs/weed/server/volume_server_ui"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func (vs *VolumeServer) uiStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +36,7 @@ func (vs *VolumeServer) uiStatusHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	args := struct {
 		Version       string
-		Masters       []string
+		Masters       []pb.ServerAddress
 		Volumes       interface{}
 		EcVolumes     interface{}
 		RemoteVolumes interface{}

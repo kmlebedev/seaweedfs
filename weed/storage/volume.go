@@ -7,15 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/stats"
-	"github.com/chrislusf/seaweedfs/weed/storage/backend"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/super_block"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
+	"github.com/seaweedfs/seaweedfs/weed/storage/backend"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/super_block"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
 )
 
 type Volume struct {
@@ -25,6 +25,7 @@ type Volume struct {
 	Collection         string
 	DataBackend        backend.BackendStorageFile
 	nm                 NeedleMapper
+	tmpNm              TempNeedleMapper
 	needleMapKind      NeedleMapKind
 	noWriteOrDelete    bool // if readonly, either noWriteOrDelete or noWriteCanDelete
 	noWriteCanDelete   bool // if readonly, either noWriteOrDelete or noWriteCanDelete
@@ -35,6 +36,7 @@ type Volume struct {
 	super_block.SuperBlock
 
 	dataFileAccessLock    sync.RWMutex
+	superBlockAccessLock  sync.Mutex
 	asyncRequestsChan     chan *needle.AsyncRequest
 	lastModifiedTsSeconds uint64 // unix time in seconds
 	lastAppendAtNs        uint64 // unix time in nanoseconds
@@ -42,7 +44,8 @@ type Volume struct {
 	lastCompactIndexOffset uint64
 	lastCompactRevision    uint16
 
-	isCompacting bool
+	isCompacting       bool
+	isCommitCompacting bool
 
 	volumeInfo *volume_server_pb.VolumeInfo
 	location   *DiskLocation
@@ -95,6 +98,8 @@ func (v *Volume) FileName(ext string) (fileName string) {
 }
 
 func (v *Volume) Version() needle.Version {
+	v.superBlockAccessLock.Lock()
+	defer v.superBlockAccessLock.Unlock()
 	if v.volumeInfo.Version != 0 {
 		v.SuperBlock.Version = needle.Version(v.volumeInfo.Version)
 	}
@@ -175,10 +180,31 @@ func (v *Volume) DiskType() types.DiskType {
 	return v.location.DiskType
 }
 
+func (v *Volume) SyncToDisk() {
+	v.dataFileAccessLock.Lock()
+	defer v.dataFileAccessLock.Unlock()
+	if v.nm != nil {
+		if err := v.nm.Sync(); err != nil {
+			glog.Warningf("Volume Close fail to sync volume idx %d", v.Id)
+		}
+	}
+	if v.DataBackend != nil {
+		if err := v.DataBackend.Sync(); err != nil {
+			glog.Warningf("Volume Close fail to sync volume %d", v.Id)
+		}
+	}
+}
+
 // Close cleanly shuts down this volume
 func (v *Volume) Close() {
 	v.dataFileAccessLock.Lock()
 	defer v.dataFileAccessLock.Unlock()
+
+	for v.isCommitCompacting {
+		time.Sleep(521 * time.Millisecond)
+		glog.Warningf("Volume Close wait for compaction %d", v.Id)
+	}
+
 	if v.nm != nil {
 		if err := v.nm.Sync(); err != nil {
 			glog.Warningf("Volume Close fail to sync volume idx %d", v.Id)
@@ -187,10 +213,9 @@ func (v *Volume) Close() {
 		v.nm = nil
 	}
 	if v.DataBackend != nil {
-		if err := v.DataBackend.Sync(); err != nil {
+		if err := v.DataBackend.Close(); err != nil {
 			glog.Warningf("Volume Close fail to sync volume %d", v.Id)
 		}
-		_ = v.DataBackend.Close()
 		v.DataBackend = nil
 		stats.VolumeServerVolumeCounter.WithLabelValues(v.Collection, "volume").Dec()
 	}
@@ -243,9 +268,9 @@ func (v *Volume) expiredLongEnough(maxDelayMinutes uint32) bool {
 func (v *Volume) collectStatus() (maxFileKey types.NeedleId, datFileSize int64, modTime time.Time, fileCount, deletedCount, deletedSize uint64, ok bool) {
 	v.dataFileAccessLock.RLock()
 	defer v.dataFileAccessLock.RUnlock()
-	glog.V(3).Infof("collectStatus volume %d", v.Id)
+	glog.V(4).Infof("collectStatus volume %d", v.Id)
 
-	if v.nm == nil {
+	if v.nm == nil || v.DataBackend == nil {
 		return
 	}
 

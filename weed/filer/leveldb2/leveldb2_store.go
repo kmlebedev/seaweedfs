@@ -14,10 +14,10 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	leveldb_util "github.com/syndtr/goleveldb/leveldb/util"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	weed_util "github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	weed_util "github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -46,10 +46,9 @@ func (store *LevelDB2Store) initialize(dir string, dbCount int) (err error) {
 	}
 
 	opts := &opt.Options{
-		BlockCacheCapacity:            32 * 1024 * 1024, // default value is 8MiB
-		WriteBuffer:                   16 * 1024 * 1024, // default value is 4MiB
-		CompactionTableSizeMultiplier: 4,
-		Filter:                        filter.NewBloomFilter(8), // false positive rate 0.02
+		BlockCacheCapacity: 32 * 1024 * 1024,         // default value is 8MiB
+		WriteBuffer:        16 * 1024 * 1024,         // default value is 4MiB
+		Filter:             filter.NewBloomFilter(8), // false positive rate 0.02
 	}
 
 	for d := 0; d < dbCount; d++ {
@@ -89,7 +88,7 @@ func (store *LevelDB2Store) InsertEntry(ctx context.Context, entry *filer.Entry)
 		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
 	}
 
-	if len(entry.Chunks) > 50 {
+	if len(entry.Chunks) > filer.CountEntryChunksForGzip {
 		value = weed_util.MaybeGzipData(value)
 	}
 

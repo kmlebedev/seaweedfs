@@ -1,13 +1,14 @@
 package filer
 
 import (
+	"math"
 	"strings"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/wdclient"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/wdclient"
 )
 
 func LookupByMasterClientFn(masterClient *wdclient.MasterClient) func(vids []string) (map[string]*operation.LookupResult, error) {
@@ -57,7 +58,7 @@ func (f *Filer) loopProcessingDeletion() {
 						glog.V(0).Infof("deleting fileIds len=%d error: %v", deletionCount, err)
 					}
 				} else {
-					glog.V(1).Infof("deleting fileIds len=%d", deletionCount)
+					glog.V(2).Infof("deleting fileIds %+v", toDeleteFileIds)
 				}
 			}
 		})
@@ -93,10 +94,10 @@ func (f *Filer) doDeleteFileIds(fileIds []string) {
 }
 
 func (f *Filer) DirectDeleteChunks(chunks []*filer_pb.FileChunk) {
-	var fildIdsToDelete []string
+	var fileIdsToDelete []string
 	for _, chunk := range chunks {
 		if !chunk.IsChunkManifest {
-			fildIdsToDelete = append(fildIdsToDelete, chunk.GetFileIdString())
+			fileIdsToDelete = append(fileIdsToDelete, chunk.GetFileIdString())
 			continue
 		}
 		dataChunks, manifestResolveErr := ResolveOneChunkManifest(f.MasterClient.LookupFileId, chunk)
@@ -104,12 +105,12 @@ func (f *Filer) DirectDeleteChunks(chunks []*filer_pb.FileChunk) {
 			glog.V(0).Infof("failed to resolve manifest %s: %v", chunk.FileId, manifestResolveErr)
 		}
 		for _, dChunk := range dataChunks {
-			fildIdsToDelete = append(fildIdsToDelete, dChunk.GetFileIdString())
+			fileIdsToDelete = append(fileIdsToDelete, dChunk.GetFileIdString())
 		}
-		fildIdsToDelete = append(fildIdsToDelete, chunk.GetFileIdString())
+		fileIdsToDelete = append(fileIdsToDelete, chunk.GetFileIdString())
 	}
 
-	f.doDeleteFileIds(fildIdsToDelete)
+	f.doDeleteFileIds(fileIdsToDelete)
 }
 
 func (f *Filer) DeleteChunks(chunks []*filer_pb.FileChunk) {
@@ -129,6 +130,12 @@ func (f *Filer) DeleteChunks(chunks []*filer_pb.FileChunk) {
 	}
 }
 
+func (f *Filer) DeleteChunksNotRecursive(chunks []*filer_pb.FileChunk) {
+	for _, chunk := range chunks {
+		f.fileIdDeletionQueue.EnQueue(chunk.GetFileIdString())
+	}
+}
+
 func (f *Filer) deleteChunksIfNotNew(oldEntry, newEntry *Entry) {
 
 	if oldEntry == nil {
@@ -136,18 +143,41 @@ func (f *Filer) deleteChunksIfNotNew(oldEntry, newEntry *Entry) {
 	}
 	if newEntry == nil {
 		f.DeleteChunks(oldEntry.Chunks)
+		return
 	}
 
 	var toDelete []*filer_pb.FileChunk
 	newChunkIds := make(map[string]bool)
-	for _, newChunk := range newEntry.Chunks {
+	newDataChunks, newManifestChunks, err := ResolveChunkManifest(f.MasterClient.GetLookupFileIdFunction(),
+		newEntry.Chunks, 0, math.MaxInt64)
+	if err != nil {
+		glog.Errorf("Failed to resolve new entry chunks when delete old entry chunks. new: %s, old: %s",
+			newEntry.Chunks, oldEntry.Chunks)
+		return
+	}
+	for _, newChunk := range newDataChunks {
+		newChunkIds[newChunk.GetFileIdString()] = true
+	}
+	for _, newChunk := range newManifestChunks {
 		newChunkIds[newChunk.GetFileIdString()] = true
 	}
 
-	for _, oldChunk := range oldEntry.Chunks {
+	oldDataChunks, oldManifestChunks, err := ResolveChunkManifest(f.MasterClient.GetLookupFileIdFunction(),
+		oldEntry.Chunks, 0, math.MaxInt64)
+	if err != nil {
+		glog.Errorf("Failed to resolve old entry chunks when delete old entry chunks. new: %s, old: %s",
+			newEntry.Chunks, oldEntry.Chunks)
+		return
+	}
+	for _, oldChunk := range oldDataChunks {
 		if _, found := newChunkIds[oldChunk.GetFileIdString()]; !found {
 			toDelete = append(toDelete, oldChunk)
 		}
 	}
-	f.DeleteChunks(toDelete)
+	for _, oldChunk := range oldManifestChunks {
+		if _, found := newChunkIds[oldChunk.GetFileIdString()]; !found {
+			toDelete = append(toDelete, oldChunk)
+		}
+	}
+	f.DeleteChunksNotRecursive(toDelete)
 }

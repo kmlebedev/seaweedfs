@@ -1,13 +1,14 @@
-//+build rocksdb
+//go:build rocksdb
+// +build rocksdb
 
 package rocksdb
 
 import (
 	"time"
 
-	"github.com/tecbot/gorocksdb"
+	gorocksdb "github.com/linxGnu/grocksdb"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
 )
 
 type TTLFilter struct {
@@ -37,4 +38,9 @@ func (t *TTLFilter) Filter(level int, key, val []byte) (remove bool, newVal []by
 
 func (t *TTLFilter) Name() string {
 	return "TTLFilter"
+}
+func (t *TTLFilter) SetIgnoreSnapshots(value bool) {
+}
+
+func (t *TTLFilter) Destroy() {
 }

@@ -6,18 +6,24 @@ import (
 	"fmt"
 	"github.com/syndtr/goleveldb/leveldb"
 	leveldb_errors "github.com/syndtr/goleveldb/leveldb/errors"
+	"github.com/syndtr/goleveldb/leveldb/filter"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	leveldb_util "github.com/syndtr/goleveldb/leveldb/util"
+	"io"
 	"os"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	weed_util "github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	weed_util "github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 const (
 	DIR_FILE_SEPARATOR = byte(0x00)
+)
+
+var (
+	_ = filer.Debuggable(&LevelDBStore{})
 )
 
 func init() {
@@ -45,9 +51,9 @@ func (store *LevelDBStore) initialize(dir string) (err error) {
 	}
 
 	opts := &opt.Options{
-		BlockCacheCapacity:            32 * 1024 * 1024, // default value is 8MiB
-		WriteBuffer:                   16 * 1024 * 1024, // default value is 4MiB
-		CompactionTableSizeMultiplier: 10,
+		BlockCacheCapacity: 32 * 1024 * 1024,         // default value is 8MiB
+		WriteBuffer:        16 * 1024 * 1024,         // default value is 4MiB
+		Filter:             filter.NewBloomFilter(8), // false positive rate 0.02
 	}
 
 	if store.db, err = leveldb.OpenFile(dir, opts); err != nil {
@@ -80,7 +86,7 @@ func (store *LevelDBStore) InsertEntry(ctx context.Context, entry *filer.Entry) 
 		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
 	}
 
-	if len(entry.Chunks) > 50 {
+	if len(entry.Chunks) > filer.CountEntryChunksForGzip {
 		value = weed_util.MaybeGzipData(value)
 	}
 
@@ -240,4 +246,14 @@ func getNameFromKey(key []byte) string {
 
 func (store *LevelDBStore) Shutdown() {
 	store.db.Close()
+}
+
+func (store *LevelDBStore) Debug(writer io.Writer) {
+	iter := store.db.NewIterator(&leveldb_util.Range{}, nil)
+	for iter.Next() {
+		key := iter.Key()
+		fullName := bytes.Replace(key, []byte{DIR_FILE_SEPARATOR}, []byte{' '}, 1)
+		fmt.Fprintf(writer, "%v\n", string(fullName))
+	}
+	iter.Release()
 }

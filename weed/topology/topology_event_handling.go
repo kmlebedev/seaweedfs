@@ -1,13 +1,15 @@
 package topology
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
+	"github.com/seaweedfs/seaweedfs/weed/storage/erasure_coding"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"google.golang.org/grpc"
 	"math/rand"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/storage"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/storage"
 )
 
 func (t *Topology) StartRefreshWritableVolumes(grpcDialOption grpc.DialOption, garbageThreshold float64, growThreshold float64, preallocate int64) {
@@ -21,11 +23,13 @@ func (t *Topology) StartRefreshWritableVolumes(grpcDialOption grpc.DialOption, g
 		}
 	}()
 	go func(garbageThreshold float64) {
-		c := time.Tick(15 * time.Minute)
-		for _ = range c {
+		for {
 			if t.IsLeader() {
-				t.Vacuum(grpcDialOption, garbageThreshold, preallocate)
+				t.Vacuum(grpcDialOption, garbageThreshold, 0, "", preallocate)
+			} else {
+				stats.MasterReplicaPlacementMismatch.Reset()
 			}
+			time.Sleep(14*time.Minute + time.Duration(120*rand.Float32())*time.Second)
 		}
 	}(garbageThreshold)
 	go func() {
@@ -84,7 +88,8 @@ func (t *Topology) UnRegisterDataNode(dn *DataNode) {
 
 	negativeUsages := dn.GetDiskUsages().negative()
 	dn.UpAdjustDiskUsageDelta(negativeUsages)
-
+	dn.DeltaUpdateVolumes([]storage.VolumeInfo{}, dn.GetVolumes())
+	dn.DeltaUpdateEcShards([]*erasure_coding.EcVolumeInfo{}, dn.GetEcShards())
 	if dn.Parent() != nil {
 		dn.Parent().UnlinkChildNode(dn.Id())
 	}

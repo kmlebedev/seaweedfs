@@ -3,15 +3,15 @@ package sub
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
-	"github.com/golang/protobuf/proto"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
+	"google.golang.org/protobuf/proto"
 )
 
 func init() {
@@ -119,7 +119,7 @@ type KafkaProgress struct {
 
 func loadProgress(offsetFile string) *KafkaProgress {
 	progress := &KafkaProgress{}
-	data, err := ioutil.ReadFile(offsetFile)
+	data, err := os.ReadFile(offsetFile)
 	if err != nil {
 		glog.Warningf("failed to read kafka progress file: %s", offsetFile)
 		return nil
@@ -137,7 +137,7 @@ func (progress *KafkaProgress) saveProgress() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal progress: %v", err)
 	}
-	err = ioutil.WriteFile(progress.offsetFile, data, 0640)
+	err = util.WriteFile(progress.offsetFile, data, 0640)
 	if err != nil {
 		return fmt.Errorf("failed to save progress to %s: %v", progress.offsetFile, err)
 	}
@@ -146,11 +146,11 @@ func (progress *KafkaProgress) saveProgress() error {
 	return nil
 }
 
-func (progress *KafkaProgress) setOffset(parition int32, offset int64) error {
+func (progress *KafkaProgress) setOffset(partition int32, offset int64) error {
 	progress.Lock()
 	defer progress.Unlock()
 
-	progress.PartitionOffsets[parition] = offset
+	progress.PartitionOffsets[partition] = offset
 	if int(time.Now().Sub(progress.lastSaveTime).Seconds()) > progress.offsetSaveIntervalSeconds {
 		return progress.saveProgress()
 	}

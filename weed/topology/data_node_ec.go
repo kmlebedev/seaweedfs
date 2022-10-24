@@ -1,9 +1,9 @@
 package topology
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/storage/erasure_coding"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/storage/erasure_coding"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 func (dn *DataNode) GetEcShards() (ret []*erasure_coding.EcVolumeInfo) {
@@ -58,7 +58,7 @@ func (dn *DataNode) UpdateEcShards(actualShards []*erasure_coding.EcVolumeInfo) 
 	}
 
 	for _, ecShards := range actualShards {
-		if dn.hasEcShards(ecShards.VolumeId) {
+		if dn.HasEcShards(ecShards.VolumeId) {
 			continue
 		}
 
@@ -79,7 +79,7 @@ func (dn *DataNode) UpdateEcShards(actualShards []*erasure_coding.EcVolumeInfo) 
 	return
 }
 
-func (dn *DataNode) hasEcShards(volumeId needle.VolumeId) (found bool) {
+func (dn *DataNode) HasEcShards(volumeId needle.VolumeId) (found bool) {
 	dn.RLock()
 	defer dn.RUnlock()
 	for _, c := range dn.children {

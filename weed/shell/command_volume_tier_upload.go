@@ -4,14 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
 	"io"
 	"time"
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
 )
 
 func init() {
@@ -56,10 +57,6 @@ func (c *commandVolumeTierUpload) Help() string {
 
 func (c *commandVolumeTierUpload) Do(args []string, commandEnv *CommandEnv, writer io.Writer) (err error) {
 
-	if err = commandEnv.confirmIsLocked(); err != nil {
-		return
-	}
-
 	tierCommand := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
 	volumeId := tierCommand.Int("volumeId", 0, "the volume id")
 	collection := tierCommand.String("collection", "", "the collection name")
@@ -69,6 +66,10 @@ func (c *commandVolumeTierUpload) Do(args []string, commandEnv *CommandEnv, writ
 	keepLocalDatFile := tierCommand.Bool("keepLocalDatFile", false, "whether keep local dat file")
 	if err = tierCommand.Parse(args); err != nil {
 		return nil
+	}
+
+	if err = commandEnv.confirmIsLocked(args); err != nil {
+		return
 	}
 
 	vid := needle.VolumeId(*volumeId)
@@ -96,28 +97,41 @@ func (c *commandVolumeTierUpload) Do(args []string, commandEnv *CommandEnv, writ
 
 func doVolumeTierUpload(commandEnv *CommandEnv, writer io.Writer, collection string, vid needle.VolumeId, dest string, keepLocalDatFile bool) (err error) {
 	// find volume location
-	locations, found := commandEnv.MasterClient.GetLocations(uint32(vid))
+	existingLocations, found := commandEnv.MasterClient.GetLocations(uint32(vid))
 	if !found {
 		return fmt.Errorf("volume %d not found", vid)
 	}
 
-	err = markVolumeReplicasWritable(commandEnv.option.GrpcDialOption, needle.VolumeId(vid), locations, false)
+	err = markVolumeReplicasWritable(commandEnv.option.GrpcDialOption, vid, existingLocations, false)
 	if err != nil {
-		return fmt.Errorf("mark volume %d as readonly on %s: %v", vid, locations[0].Url, err)
+		return fmt.Errorf("mark volume %d as readonly on %s: %v", vid, existingLocations[0].Url, err)
 	}
 
 	// copy the .dat file to remote tier
-	err = uploadDatToRemoteTier(commandEnv.option.GrpcDialOption, writer, needle.VolumeId(vid), collection, locations[0].Url, dest, keepLocalDatFile)
+	err = uploadDatToRemoteTier(commandEnv.option.GrpcDialOption, writer, vid, collection, existingLocations[0].ServerAddress(), dest, keepLocalDatFile)
 	if err != nil {
-		return fmt.Errorf("copy dat file for volume %d on %s to %s: %v", vid, locations[0].Url, dest, err)
+		return fmt.Errorf("copy dat file for volume %d on %s to %s: %v", vid, existingLocations[0].Url, dest, err)
+	}
+
+	// now the first replica has the .idx and .vif files.
+	// ask replicas on other volume server to delete its own local copy
+	for i, location := range existingLocations {
+		if i == 0 {
+			break
+		}
+		fmt.Printf("delete volume %d from %s\n", vid, location.Url)
+		err = deleteVolume(commandEnv.option.GrpcDialOption, vid, location.ServerAddress())
+		if err != nil {
+			return fmt.Errorf("deleteVolume %s volume %d: %v", location.Url, vid, err)
+		}
 	}
 
 	return nil
 }
 
-func uploadDatToRemoteTier(grpcDialOption grpc.DialOption, writer io.Writer, volumeId needle.VolumeId, collection string, sourceVolumeServer string, dest string, keepLocalDatFile bool) error {
+func uploadDatToRemoteTier(grpcDialOption grpc.DialOption, writer io.Writer, volumeId needle.VolumeId, collection string, sourceVolumeServer pb.ServerAddress, dest string, keepLocalDatFile bool) error {
 
-	err := operation.WithVolumeServerClient(sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+	err := operation.WithVolumeServerClient(true, sourceVolumeServer, grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 		stream, copyErr := volumeServerClient.VolumeTierMoveDatToRemote(context.Background(), &volume_server_pb.VolumeTierMoveDatToRemoteRequest{
 			VolumeId:               uint32(volumeId),
 			Collection:             collection,

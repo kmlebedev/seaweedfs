@@ -3,10 +3,10 @@ package mongodb
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -107,7 +107,7 @@ func (store *MongodbStore) UpdateEntry(ctx context.Context, entry *filer.Entry) 
 		return fmt.Errorf("encode %s: %s", entry.FullPath, err)
 	}
 
-	if len(entry.Chunks) > 50 {
+	if len(entry.Chunks) > filer.CountEntryChunksForGzip {
 		meta = util.MaybeGzipData(meta)
 	}
 
@@ -159,7 +159,7 @@ func (store *MongodbStore) DeleteEntry(ctx context.Context, fullpath util.FullPa
 	dir, name := fullpath.DirAndName()
 
 	where := bson.M{"directory": dir, "name": name}
-	_, err := store.connect.Database(store.database).Collection(store.collectionName).DeleteOne(ctx, where)
+	_, err := store.connect.Database(store.database).Collection(store.collectionName).DeleteMany(ctx, where)
 	if err != nil {
 		return fmt.Errorf("delete %s : %v", fullpath, err)
 	}
@@ -193,11 +193,15 @@ func (store *MongodbStore) ListDirectoryEntries(ctx context.Context, dirPath uti
 	optLimit := int64(limit)
 	opts := &options.FindOptions{Limit: &optLimit, Sort: bson.M{"name": 1}}
 	cur, err := store.connect.Database(store.database).Collection(store.collectionName).Find(ctx, where, opts)
+	if err != nil {
+		return lastFileName, fmt.Errorf("failed to list directory entries: find error: %w", err)
+	}
+
 	for cur.Next(ctx) {
 		var data Model
-		err := cur.Decode(&data)
-		if err != nil && err != mongo.ErrNoDocuments {
-			return lastFileName, err
+		err = cur.Decode(&data)
+		if err != nil {
+			break
 		}
 
 		entry := &filer.Entry{

@@ -4,11 +4,11 @@ import (
 	"sort"
 	"sync"
 
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 const (
-	batch = 100000
+	batch = 10000
 )
 
 type SectionalNeedleId uint32
@@ -49,7 +49,7 @@ func NewCompactSection(start NeedleId) *CompactSection {
 	}
 }
 
-//return old entry size
+// return old entry size
 func (cs *CompactSection) Set(key NeedleId, offset Offset, size Size) (oldOffset Offset, oldSize Size) {
 	cs.Lock()
 	if key > cs.end {
@@ -142,11 +142,15 @@ func (cs *CompactSection) deleteOverflowEntry(key SectionalNeedleId) {
 	}
 }
 
-//return old entry size
+// return old entry size
 func (cs *CompactSection) Delete(key NeedleId) Size {
-	skey := SectionalNeedleId(key - cs.start)
 	cs.Lock()
+	defer cs.Unlock()
 	ret := Size(0)
+	if key > cs.end {
+		return ret
+	}
+	skey := SectionalNeedleId(key - cs.start)
 	if i := cs.binarySearchValues(skey); i >= 0 {
 		if cs.values[i].Size > 0 && cs.values[i].Size.IsValid() {
 			ret = cs.values[i].Size
@@ -157,23 +161,23 @@ func (cs *CompactSection) Delete(key NeedleId) Size {
 		cs.deleteOverflowEntry(skey)
 		ret = v.Size
 	}
-	cs.Unlock()
 	return ret
 }
 func (cs *CompactSection) Get(key NeedleId) (*NeedleValue, bool) {
 	cs.RLock()
+	defer cs.RUnlock()
+	if key > cs.end {
+		return nil, false
+	}
 	skey := SectionalNeedleId(key - cs.start)
 	if ve, v, ok := cs.findOverflowEntry(skey); ok {
-		cs.RUnlock()
 		nv := toNeedleValue(ve, v, cs)
 		return &nv, true
 	}
 	if i := cs.binarySearchValues(skey); i >= 0 {
-		cs.RUnlock()
 		nv := toNeedleValue(cs.valuesExtra[i], cs.values[i], cs)
 		return &nv, true
 	}
-	cs.RUnlock()
 	return nil, false
 }
 func (cs *CompactSection) binarySearchValues(key SectionalNeedleId) int {
@@ -189,8 +193,8 @@ func (cs *CompactSection) binarySearchValues(key SectionalNeedleId) int {
 	return x
 }
 
-//This map assumes mostly inserting increasing keys
-//This map assumes mostly inserting increasing keys
+// This map assumes mostly inserting increasing keys
+// This map assumes mostly inserting increasing keys
 type CompactMap struct {
 	list []*CompactSection
 }

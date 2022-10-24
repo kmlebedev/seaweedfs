@@ -67,7 +67,6 @@
 //		"glob" pattern and N is a V level. For instance,
 //			-vmodule=gopher*=3
 //		sets the V level to 3 in all Go files whose names begin "gopher".
-//
 package glog
 
 import (
@@ -75,7 +74,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	flag "github.com/chrislusf/seaweedfs/weed/util/fla9"
+	flag "github.com/seaweedfs/seaweedfs/weed/util/fla9"
 	"io"
 	stdLog "log"
 	"os"
@@ -524,8 +523,11 @@ It returns a buffer containing the formatted header and the user's file and line
 The depth specifies how many stack frames above lives the source line to be identified in the log message.
 
 Log lines have this form:
+
 	Lmmdd hh:mm:ss.uuuuuu threadid file:line] msg...
+
 where the fields are defined as follows:
+
 	L                A single character, representing the log level (eg 'I' for INFO)
 	mm               The month (zero padded; ie May is '05')
 	dd               The day (zero padded)
@@ -574,16 +576,15 @@ func (l *loggingT) formatHeader(s severity, file string, line int) *buffer {
 	buf.twoDigits(9, minute)
 	buf.tmp[11] = ':'
 	buf.twoDigits(12, second)
-	buf.tmp[14] = ' '
-	buf.nDigits(5, 15, pid, ' ') // TODO: should be TID
-	buf.tmp[20] = ' '
-	buf.Write(buf.tmp[:21])
+	buf.tmp[14] = '.'
+	buf.nDigits(6, 15, now.Nanosecond()/1000, '0')
+	buf.tmp[21] = ' '
+	buf.Write(buf.tmp[:22])
 	buf.WriteString(file)
 	buf.tmp[0] = ':'
 	n := buf.someDigits(1, line)
-	buf.tmp[n+1] = ']'
-	buf.tmp[n+2] = ' '
-	buf.Write(buf.tmp[:n+3])
+	buf.tmp[n+1] = ' '
+	buf.Write(buf.tmp[:n+2])
 	return buf
 }
 
@@ -987,9 +988,13 @@ type Verbose bool
 // The returned value is a boolean of type Verbose, which implements Info, Infoln
 // and Infof. These methods will write to the Info log if called.
 // Thus, one may write either
+//
 //	if glog.V(2) { glog.Info("log this") }
+//
 // or
+//
 //	glog.V(2).Info("log this")
+//
 // The second form is shorter but the first is cheaper if logging is off because it does
 // not evaluate its arguments.
 //

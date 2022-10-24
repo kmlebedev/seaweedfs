@@ -3,18 +3,19 @@ package erasure_coding
 import (
 	"errors"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/volume_info"
+	"golang.org/x/exp/slices"
 	"math"
 	"os"
-	"sort"
 	"sync"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/idx"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/idx"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 var (
@@ -30,7 +31,7 @@ type EcVolume struct {
 	ecxFileSize               int64
 	ecxCreatedAt              time.Time
 	Shards                    []*EcVolumeShard
-	ShardLocations            map[ShardId][]string
+	ShardLocations            map[ShardId][]pb.ServerAddress
 	ShardLocationsRefreshTime time.Time
 	ShardLocationsLock        sync.RWMutex
 	Version                   needle.Version
@@ -63,13 +64,13 @@ func NewEcVolume(diskType types.DiskType, dir string, dirIdx string, collection 
 
 	// read volume info
 	ev.Version = needle.Version3
-	if volumeInfo, _, found, _ := pb.MaybeLoadVolumeInfo(dataBaseFileName + ".vif"); found {
+	if volumeInfo, _, found, _ := volume_info.MaybeLoadVolumeInfo(dataBaseFileName + ".vif"); found {
 		ev.Version = needle.Version(volumeInfo.Version)
 	} else {
-		pb.SaveVolumeInfo(dataBaseFileName+".vif", &volume_server_pb.VolumeInfo{Version: uint32(ev.Version)})
+		volume_info.SaveVolumeInfo(dataBaseFileName+".vif", &volume_server_pb.VolumeInfo{Version: uint32(ev.Version)})
 	}
 
-	ev.ShardLocations = make(map[ShardId][]string)
+	ev.ShardLocations = make(map[ShardId][]pb.ServerAddress)
 
 	return
 }
@@ -81,9 +82,8 @@ func (ev *EcVolume) AddEcVolumeShard(ecVolumeShard *EcVolumeShard) bool {
 		}
 	}
 	ev.Shards = append(ev.Shards, ecVolumeShard)
-	sort.Slice(ev.Shards, func(i, j int) bool {
-		return ev.Shards[i].VolumeId < ev.Shards[j].VolumeId ||
-			ev.Shards[i].VolumeId == ev.Shards[j].VolumeId && ev.Shards[i].ShardId < ev.Shards[j].ShardId
+	slices.SortFunc(ev.Shards, func(a, b *EcVolumeShard) bool {
+		return a.VolumeId < b.VolumeId || a.VolumeId == b.VolumeId && a.ShardId < b.ShardId
 	})
 	return true
 }
@@ -125,6 +125,7 @@ func (ev *EcVolume) Close() {
 		ev.ecjFileAccessLock.Unlock()
 	}
 	if ev.ecxFile != nil {
+		_ = ev.ecxFile.Sync()
 		_ = ev.ecxFile.Close()
 		ev.ecxFile = nil
 	}
@@ -210,10 +211,14 @@ func (ev *EcVolume) LocateEcShardNeedle(needleId types.NeedleId, version needle.
 		return types.Offset{}, 0, nil, fmt.Errorf("FindNeedleFromEcx: %v", err)
 	}
 
-	shard := ev.Shards[0]
+	intervals = ev.LocateEcShardNeedleInterval(version, offset.ToActualOffset(), types.Size(needle.GetActualSize(size, version)))
+	return
+}
 
+func (ev *EcVolume) LocateEcShardNeedleInterval(version needle.Version, offset int64, size types.Size) (intervals []Interval) {
+	shard := ev.Shards[0]
 	// calculate the locations in the ec shards
-	intervals = LocateData(ErasureCodingLargeBlockSize, ErasureCodingSmallBlockSize, DataShardsCount*shard.ecdFileSize, offset.ToActualOffset(), types.Size(needle.GetActualSize(size, version)))
+	intervals = LocateData(ErasureCodingLargeBlockSize, ErasureCodingSmallBlockSize, DataShardsCount*shard.ecdFileSize, offset, types.Size(needle.GetActualSize(size, version)))
 
 	return
 }

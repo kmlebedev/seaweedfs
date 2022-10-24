@@ -24,7 +24,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 	"hash"
 	"io"
 	"net/http"
@@ -54,7 +55,8 @@ func getChunkSignature(secretKey string, seedSignature string, region string, da
 }
 
 // calculateSeedSignature - Calculate seed signature in accordance with
-//     - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-streaming.html
+//   - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-streaming.html
+//
 // returns signature, error otherwise if the signature mismatches or any other
 // error while parsing and validating.
 func (iam *IdentityAccessManagement) calculateSeedSignature(r *http.Request) (cred *Credential, signature string, region string, date time.Time, errCode s3err.ErrorCode) {
@@ -90,8 +92,8 @@ func (iam *IdentityAccessManagement) calculateSeedSignature(r *http.Request) (cr
 		return nil, "", "", time.Time{}, s3err.ErrInvalidAccessKeyID
 	}
 
-	bucket, _ := getBucketAndObject(r)
-	if !identity.canDo("Write", bucket) {
+	bucket, object := s3_constants.GetBucketAndObject(r)
+	if !identity.canDo(s3_constants.ACTION_WRITE, bucket, object) {
 		errCode = s3err.ErrAccessDenied
 		return
 	}
@@ -133,7 +135,7 @@ func (iam *IdentityAccessManagement) calculateSeedSignature(r *http.Request) (cr
 		return nil, "", "", time.Time{}, s3err.ErrSignatureDoesNotMatch
 	}
 
-	// Return caculated signature.
+	// Return calculated signature.
 	return cred, newSignature, region, date, s3err.ErrNone
 }
 
@@ -371,7 +373,8 @@ const s3ChunkSignatureStr = ";chunk-signature="
 
 // parses3ChunkExtension removes any s3 specific chunk-extension from buf.
 // For example,
-//     "10000;chunk-signature=..." => "10000", "chunk-signature=..."
+//
+//	"10000;chunk-signature=..." => "10000", "chunk-signature=..."
 func parseS3ChunkExtension(buf []byte) ([]byte, []byte) {
 	buf = trimTrailingWhitespace(buf)
 	semi := bytes.Index(buf, []byte(s3ChunkSignatureStr))

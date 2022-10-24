@@ -2,16 +2,17 @@ package weed_server
 
 import (
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
-	"github.com/chrislusf/seaweedfs/weed/util/log_buffer"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/util/log_buffer"
 )
 
 const (
@@ -23,9 +24,11 @@ func (fs *FilerServer) SubscribeMetadata(req *filer_pb.SubscribeMetadataRequest,
 
 	peerAddress := findClientAddress(stream.Context(), 0)
 
-	clientName := fs.addClient(req.ClientName, peerAddress)
-
-	defer fs.deleteClient(clientName)
+	alreadyKnown, clientName := fs.addClient(req.ClientName, peerAddress, req.ClientId, req.ClientEpoch)
+	if alreadyKnown {
+		return fmt.Errorf("duplicated subscription detected for client %s id %d", clientName, req.ClientId)
+	}
+	defer fs.deleteClient(clientName, req.ClientId, req.ClientEpoch)
 
 	lastReadTime := time.Unix(0, req.SinceNs)
 	glog.V(0).Infof(" %v starts to subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
@@ -37,28 +40,27 @@ func (fs *FilerServer) SubscribeMetadata(req *filer_pb.SubscribeMetadataRequest,
 	var processedTsNs int64
 	var readPersistedLogErr error
 	var readInMemoryLogErr error
+	var isDone bool
 
 	for {
 
 		glog.V(4).Infof("read on disk %v aggregated subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
 
-		processedTsNs, readPersistedLogErr = fs.filer.ReadPersistedLogBuffer(lastReadTime, eachLogEntryFn)
+		processedTsNs, isDone, readPersistedLogErr = fs.filer.ReadPersistedLogBuffer(lastReadTime, req.UntilNs, eachLogEntryFn)
 		if readPersistedLogErr != nil {
 			return fmt.Errorf("reading from persisted logs: %v", readPersistedLogErr)
+		}
+		if isDone {
+			return nil
 		}
 
 		if processedTsNs != 0 {
 			lastReadTime = time.Unix(0, processedTsNs)
-		} else {
-			if readInMemoryLogErr == log_buffer.ResumeFromDiskError {
-				time.Sleep(1127 * time.Millisecond)
-				continue
-			}
 		}
 
 		glog.V(4).Infof("read in memory %v aggregated subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
 
-		lastReadTime, readInMemoryLogErr = fs.filer.MetaAggregator.MetaLogBuffer.LoopProcessLogData("aggMeta:"+clientName, lastReadTime, func() bool {
+		lastReadTime, isDone, readInMemoryLogErr = fs.filer.MetaAggregator.MetaLogBuffer.LoopProcessLogData("aggMeta:"+clientName, lastReadTime, req.UntilNs, func() bool {
 			fs.filer.MetaAggregator.ListenersLock.Lock()
 			fs.filer.MetaAggregator.ListenersCond.Wait()
 			fs.filer.MetaAggregator.ListenersLock.Unlock()
@@ -73,6 +75,9 @@ func (fs *FilerServer) SubscribeMetadata(req *filer_pb.SubscribeMetadataRequest,
 				break
 			}
 		}
+		if isDone {
+			return nil
+		}
 
 		time.Sleep(1127 * time.Millisecond)
 	}
@@ -85,12 +90,20 @@ func (fs *FilerServer) SubscribeLocalMetadata(req *filer_pb.SubscribeMetadataReq
 
 	peerAddress := findClientAddress(stream.Context(), 0)
 
-	clientName := fs.addClient(req.ClientName, peerAddress)
+	// use negative client id to differentiate from addClient()/deleteClient() used in SubscribeMetadata()
+	req.ClientId = -req.ClientId
 
-	defer fs.deleteClient(clientName)
+	alreadyKnown, clientName := fs.addClient(req.ClientName, peerAddress, req.ClientId, req.ClientEpoch)
+	if alreadyKnown {
+		return fmt.Errorf("duplicated local subscription detected for client %s clientId:%d", clientName, req.ClientId)
+	}
+	defer func() {
+		glog.V(0).Infof(" - %v local subscribe %s clientId:%d", clientName, req.PathPrefix, req.ClientId)
+		fs.deleteClient(clientName, req.ClientId, req.ClientEpoch)
+	}()
 
 	lastReadTime := time.Unix(0, req.SinceNs)
-	glog.V(0).Infof(" %v local subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
+	glog.V(0).Infof(" + %v local subscribe %s from %+v clientId:%d", clientName, req.PathPrefix, lastReadTime, req.ClientId)
 
 	eachEventNotificationFn := fs.eachEventNotificationFn(req, stream, clientName)
 
@@ -99,13 +112,18 @@ func (fs *FilerServer) SubscribeLocalMetadata(req *filer_pb.SubscribeMetadataReq
 	var processedTsNs int64
 	var readPersistedLogErr error
 	var readInMemoryLogErr error
+	var isDone bool
 
 	for {
 		// println("reading from persisted logs ...")
 		glog.V(0).Infof("read on disk %v local subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
-		processedTsNs, readPersistedLogErr = fs.filer.ReadPersistedLogBuffer(lastReadTime, eachLogEntryFn)
+		processedTsNs, isDone, readPersistedLogErr = fs.filer.ReadPersistedLogBuffer(lastReadTime, req.UntilNs, eachLogEntryFn)
 		if readPersistedLogErr != nil {
+			glog.V(0).Infof("read on disk %v local subscribe %s from %+v: %v", clientName, req.PathPrefix, lastReadTime, readPersistedLogErr)
 			return fmt.Errorf("reading from persisted logs: %v", readPersistedLogErr)
+		}
+		if isDone {
+			return nil
 		}
 
 		if processedTsNs != 0 {
@@ -119,7 +137,7 @@ func (fs *FilerServer) SubscribeLocalMetadata(req *filer_pb.SubscribeMetadataReq
 
 		glog.V(0).Infof("read in memory %v local subscribe %s from %+v", clientName, req.PathPrefix, lastReadTime)
 
-		lastReadTime, readInMemoryLogErr = fs.filer.LocalMetaLogBuffer.LoopProcessLogData("localMeta:"+clientName, lastReadTime, func() bool {
+		lastReadTime, isDone, readInMemoryLogErr = fs.filer.LocalMetaLogBuffer.LoopProcessLogData("localMeta:"+clientName, lastReadTime, req.UntilNs, func() bool {
 			fs.listenersLock.Lock()
 			fs.listenersCond.Wait()
 			fs.listenersLock.Unlock()
@@ -130,10 +148,12 @@ func (fs *FilerServer) SubscribeLocalMetadata(req *filer_pb.SubscribeMetadataReq
 				continue
 			}
 			glog.Errorf("processed to %v: %v", lastReadTime, readInMemoryLogErr)
-			time.Sleep(1127 * time.Millisecond)
 			if readInMemoryLogErr != log_buffer.ResumeError {
 				break
 			}
+		}
+		if isDone {
+			return nil
 		}
 	}
 
@@ -201,16 +221,25 @@ func (fs *FilerServer) eachEventNotificationFn(req *filer_pb.SubscribeMetadataRe
 			return nil
 		}
 
-		if !strings.HasPrefix(fullpath, req.PathPrefix) {
-			if eventNotification.NewParentPath != "" {
-				newFullPath := util.Join(eventNotification.NewParentPath, entryName)
-				if !strings.HasPrefix(newFullPath, req.PathPrefix) {
+		if hasPrefixIn(fullpath, req.PathPrefixes) {
+			// good
+		} else if matchByDirectory(dirPath, req.Directories) {
+			// good
+		} else {
+			if !strings.HasPrefix(fullpath, req.PathPrefix) {
+				if eventNotification.NewParentPath != "" {
+					newFullPath := util.Join(eventNotification.NewParentPath, entryName)
+					if !strings.HasPrefix(newFullPath, req.PathPrefix) {
+						return nil
+					}
+				} else {
 					return nil
 				}
-			} else {
-				return nil
 			}
 		}
+
+		// collect timestamps for path
+		stats.FilerServerLastSendTsOfSubscribeGauge.WithLabelValues(fs.option.Host.String(), req.ClientName, req.PathPrefix).Set(float64(tsNs))
 
 		message := &filer_pb.SubscribeMetadataResponse{
 			Directory:         dirPath,
@@ -227,12 +256,48 @@ func (fs *FilerServer) eachEventNotificationFn(req *filer_pb.SubscribeMetadataRe
 	}
 }
 
-func (fs *FilerServer) addClient(clientType string, clientAddress string) (clientName string) {
+func hasPrefixIn(text string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchByDirectory(dirPath string, directories []string) bool {
+	for _, dir := range directories {
+		if dirPath == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func (fs *FilerServer) addClient(clientType string, clientAddress string, clientId int32, clientEpoch int32) (alreadyKnown bool, clientName string) {
 	clientName = clientType + "@" + clientAddress
 	glog.V(0).Infof("+ listener %v", clientName)
+	if clientId != 0 {
+		fs.knownListenersLock.Lock()
+		defer fs.knownListenersLock.Unlock()
+		epoch, found := fs.knownListeners[clientId]
+		if !found || epoch < clientEpoch {
+			fs.knownListeners[clientId] = clientEpoch
+		} else {
+			alreadyKnown = true
+		}
+	}
 	return
 }
 
-func (fs *FilerServer) deleteClient(clientName string) {
+func (fs *FilerServer) deleteClient(clientName string, clientId int32, clientEpoch int32) {
 	glog.V(0).Infof("- listener %v", clientName)
+	if clientId != 0 {
+		fs.knownListenersLock.Lock()
+		defer fs.knownListenersLock.Unlock()
+		epoch, found := fs.knownListeners[clientId]
+		if found && epoch <= clientEpoch {
+			delete(fs.knownListeners, clientId)
+		}
+	}
 }

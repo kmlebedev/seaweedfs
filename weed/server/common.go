@@ -1,14 +1,17 @@
 package weed_server
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"io"
 	"io/fs"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,11 +19,11 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/stats"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 
 	"github.com/gorilla/mux"
 )
@@ -33,8 +36,21 @@ func init() {
 	go serverStats.Start()
 }
 
+// bodyAllowedForStatus is a copy of http.bodyAllowedForStatus non-exported function.
+func bodyAllowedForStatus(status int) bool {
+	switch {
+	case status >= 100 && status <= 199:
+		return false
+	case status == http.StatusNoContent:
+		return false
+	case status == http.StatusNotModified:
+		return false
+	}
+	return true
+}
+
 func writeJson(w http.ResponseWriter, r *http.Request, httpStatus int, obj interface{}) (err error) {
-	if httpStatus == http.StatusNoContent {
+	if !bodyAllowedForStatus(httpStatus) {
 		return
 	}
 
@@ -94,6 +110,7 @@ func writeJsonQuiet(w http.ResponseWriter, r *http.Request, httpStatus int, obj 
 func writeJsonError(w http.ResponseWriter, r *http.Request, httpStatus int, err error) {
 	m := make(map[string]interface{})
 	m["error"] = err.Error()
+	glog.V(1).Infof("error JSON response status %d: %s", httpStatus, m["error"])
 	writeJsonQuiet(w, r, httpStatus, m)
 }
 
@@ -148,7 +165,16 @@ func submitForClientHandler(w http.ResponseWriter, r *http.Request, masterFn ope
 	}
 
 	debug("upload file to store", url)
-	uploadResult, err := operation.UploadData(url, pu.FileName, false, pu.Data, pu.IsGzipped, pu.MimeType, pu.PairMap, assignResult.Auth)
+	uploadOption := &operation.UploadOption{
+		UploadUrl:         url,
+		Filename:          pu.FileName,
+		Cipher:            false,
+		IsInputCompressed: pu.IsGzipped,
+		MimeType:          pu.MimeType,
+		PairMap:           pu.PairMap,
+		Jwt:               assignResult.Auth,
+	}
+	uploadResult, err := operation.UploadData(pu.Data, uploadOption)
 	if err != nil {
 		writeJsonError(w, r, http.StatusInternalServerError, err)
 		return
@@ -227,8 +253,20 @@ func handleStaticResources2(r *mux.Router) {
 	r.PathPrefix("/seaweedfsstatic/").Handler(http.StripPrefix("/seaweedfsstatic", http.FileServer(http.FS(StaticFS))))
 }
 
+func adjustPassthroughHeaders(w http.ResponseWriter, r *http.Request, filename string) {
+	for header, values := range r.Header {
+		if normalizedHeader, ok := s3_constants.PassThroughHeaders[strings.ToLower(header)]; ok {
+			w.Header()[normalizedHeader] = values
+		}
+	}
+	adjustHeaderContentDisposition(w, r, filename)
+}
 func adjustHeaderContentDisposition(w http.ResponseWriter, r *http.Request, filename string) {
+	if contentDisposition := w.Header().Get("Content-Disposition"); contentDisposition != "" {
+		return
+	}
 	if filename != "" {
+		filename = url.QueryEscape(filename)
 		contentDisposition := "inline"
 		if r.FormValue("dl") != "" {
 			if dl, _ := strconv.ParseBool(r.FormValue("dl")); dl {
@@ -239,34 +277,38 @@ func adjustHeaderContentDisposition(w http.ResponseWriter, r *http.Request, file
 	}
 }
 
-func processRangeRequest(r *http.Request, w http.ResponseWriter, totalSize int64, mimeType string, writeFn func(writer io.Writer, offset int64, size int64) error) {
+func processRangeRequest(r *http.Request, w http.ResponseWriter, totalSize int64, mimeType string, writeFn func(writer io.Writer, offset int64, size int64) error) error {
 	rangeReq := r.Header.Get("Range")
+	bufferedWriter := bufio.NewWriterSize(w, 128*1024)
+	defer bufferedWriter.Flush()
 
 	if rangeReq == "" {
 		w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
-		if err := writeFn(w, 0, totalSize); err != nil {
+		if err := writeFn(bufferedWriter, 0, totalSize); err != nil {
+			glog.Errorf("processRangeRequest: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return fmt.Errorf("processRangeRequest: %v", err)
 		}
-		return
+		return nil
 	}
 
 	//the rest is dealing with partial content request
 	//mostly copy from src/pkg/net/http/fs.go
 	ranges, err := parseRange(rangeReq, totalSize)
 	if err != nil {
+		glog.Errorf("processRangeRequest headers: %+v err: %v", w.Header(), err)
 		http.Error(w, err.Error(), http.StatusRequestedRangeNotSatisfiable)
-		return
+		return fmt.Errorf("processRangeRequest header: %v", err)
 	}
 	if sumRangesSize(ranges) > totalSize {
 		// The total number of bytes in all the ranges
 		// is larger than the size of the file by
 		// itself, so this is probably an attack, or a
 		// dumb client.  Ignore the range request.
-		return
+		return nil
 	}
 	if len(ranges) == 0 {
-		return
+		return nil
 	}
 	if len(ranges) == 1 {
 		// RFC 2616, Section 14.16:
@@ -285,19 +327,20 @@ func processRangeRequest(r *http.Request, w http.ResponseWriter, totalSize int64
 		w.Header().Set("Content-Range", ra.contentRange(totalSize))
 
 		w.WriteHeader(http.StatusPartialContent)
-		err = writeFn(w, ra.start, ra.length)
+		err = writeFn(bufferedWriter, ra.start, ra.length)
 		if err != nil {
+			glog.Errorf("processRangeRequest range[0]: %+v err: %v", w.Header(), err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return fmt.Errorf("processRangeRequest range[0]: %v", err)
 		}
-		return
+		return nil
 	}
 
 	// process multiple ranges
 	for _, ra := range ranges {
 		if ra.start > totalSize {
 			http.Error(w, "Out of Range", http.StatusRequestedRangeNotSatisfiable)
-			return
+			return fmt.Errorf("out of range: %v", err)
 		}
 	}
 	sendSize := rangesMIMESize(ranges, mimeType, totalSize)
@@ -325,8 +368,10 @@ func processRangeRequest(r *http.Request, w http.ResponseWriter, totalSize int64
 		w.Header().Set("Content-Length", strconv.FormatInt(sendSize, 10))
 	}
 	w.WriteHeader(http.StatusPartialContent)
-	if _, err := io.CopyN(w, sendContent, sendSize); err != nil {
+	if _, err := io.CopyN(bufferedWriter, sendContent, sendSize); err != nil {
+		glog.Errorf("processRangeRequest err: %v", err)
 		http.Error(w, "Internal Error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("processRangeRequest err: %v", err)
 	}
+	return nil
 }

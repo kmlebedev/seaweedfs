@@ -2,11 +2,18 @@ package weed_server
 
 import (
 	"context"
+	"github.com/seaweedfs/seaweedfs/weed/stats"
+	"strconv"
+	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
+	"github.com/prometheus/procfs"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"runtime"
 )
+
+var numCPU = runtime.NumCPU()
 
 func (vs *VolumeServer) VacuumVolumeCheck(ctx context.Context, req *volume_server_pb.VacuumVolumeCheckRequest) (*volume_server_pb.VacuumVolumeCheckResponse, error) {
 
@@ -24,33 +31,64 @@ func (vs *VolumeServer) VacuumVolumeCheck(ctx context.Context, req *volume_serve
 
 }
 
-func (vs *VolumeServer) VacuumVolumeCompact(ctx context.Context, req *volume_server_pb.VacuumVolumeCompactRequest) (*volume_server_pb.VacuumVolumeCompactResponse, error) {
+func (vs *VolumeServer) VacuumVolumeCompact(req *volume_server_pb.VacuumVolumeCompactRequest, stream volume_server_pb.VolumeServer_VacuumVolumeCompactServer) error {
+	start := time.Now()
+	defer func(start time.Time) {
+		stats.VolumeServerVacuumingHistogram.WithLabelValues("compact").Observe(time.Since(start).Seconds())
+	}(start)
 
 	resp := &volume_server_pb.VacuumVolumeCompactResponse{}
+	reportInterval := int64(1024 * 1024 * 128)
+	nextReportTarget := reportInterval
+	fs, fsErr := procfs.NewDefaultFS()
+	var sendErr error
+	err := vs.store.CompactVolume(needle.VolumeId(req.VolumeId), req.Preallocate, vs.compactionBytePerSecond, func(processed int64) bool {
+		if processed > nextReportTarget {
+			resp.ProcessedBytes = processed
+			if fsErr == nil && numCPU > 0 {
+				if fsLa, err := fs.LoadAvg(); err == nil {
+					resp.LoadAvg_1M = float32(fsLa.Load1 / float64(numCPU))
+				}
+			}
+			if sendErr = stream.Send(resp); sendErr != nil {
+				return false
+			}
+			nextReportTarget = processed + reportInterval
+		}
+		return true
+	})
 
-	err := vs.store.CompactVolume(needle.VolumeId(req.VolumeId), req.Preallocate, vs.compactionBytePerSecond)
-
+	stats.VolumeServerVacuumingCompactCounter.WithLabelValues(strconv.FormatBool(err == nil && sendErr == nil)).Inc()
 	if err != nil {
-		glog.Errorf("compact volume %d: %v", req.VolumeId, err)
-	} else {
-		glog.V(1).Infof("compact volume %d", req.VolumeId)
+		glog.Errorf("failed compact volume %d: %v", req.VolumeId, err)
+		return err
+	}
+	if sendErr != nil {
+		glog.Errorf("failed compact volume %d report progress: %v", req.VolumeId, sendErr)
+		return sendErr
 	}
 
-	return resp, err
+	glog.V(1).Infof("compact volume %d", req.VolumeId)
+	return nil
 
 }
 
 func (vs *VolumeServer) VacuumVolumeCommit(ctx context.Context, req *volume_server_pb.VacuumVolumeCommitRequest) (*volume_server_pb.VacuumVolumeCommitResponse, error) {
+	start := time.Now()
+	defer func(start time.Time) {
+		stats.VolumeServerVacuumingHistogram.WithLabelValues("commit").Observe(time.Since(start).Seconds())
+	}(start)
 
 	resp := &volume_server_pb.VacuumVolumeCommitResponse{}
 
 	readOnly, err := vs.store.CommitCompactVolume(needle.VolumeId(req.VolumeId))
 
 	if err != nil {
-		glog.Errorf("commit volume %d: %v", req.VolumeId, err)
+		glog.Errorf("failed commit volume %d: %v", req.VolumeId, err)
 	} else {
 		glog.V(1).Infof("commit volume %d", req.VolumeId)
 	}
+	stats.VolumeServerVacuumingCommitCounter.WithLabelValues(strconv.FormatBool(err == nil)).Inc()
 	resp.IsReadOnly = readOnly
 	return resp, err
 
@@ -63,7 +101,7 @@ func (vs *VolumeServer) VacuumVolumeCleanup(ctx context.Context, req *volume_ser
 	err := vs.store.CommitCleanupVolume(needle.VolumeId(req.VolumeId))
 
 	if err != nil {
-		glog.Errorf("cleanup volume %d: %v", req.VolumeId, err)
+		glog.Errorf("failed cleanup volume %d: %v", req.VolumeId, err)
 	} else {
 		glog.V(1).Infof("cleanup volume %d", req.VolumeId)
 	}

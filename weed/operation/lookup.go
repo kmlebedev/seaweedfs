@@ -4,18 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
 	"google.golang.org/grpc"
 	"math/rand"
 	"strings"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
 )
 
 type Location struct {
-	Url       string `json:"url,omitempty"`
-	PublicUrl string `json:"publicUrl,omitempty"`
+	Url        string `json:"url,omitempty"`
+	PublicUrl  string `json:"publicUrl,omitempty"`
+	DataCenter string `json:"dataCenter,omitempty"`
+	GrpcPort   int    `json:"grpcPort,omitempty"`
 }
+
+func (l *Location) ServerAddress() pb.ServerAddress {
+	return pb.NewServerAddressWithGrpcPort(l.Url, l.GrpcPort)
+}
+
 type LookupResult struct {
 	VolumeOrFileId string     `json:"volumeOrFileId,omitempty"`
 	Locations      []Location `json:"locations,omitempty"`
@@ -72,7 +80,7 @@ func LookupVolumeIds(masterFn GetMasterFn, grpcDialOption grpc.DialOption, vids 
 
 	//only query unknown_vids
 
-	err := WithMasterServerClient(masterFn(), grpcDialOption, func(masterClient master_pb.SeaweedClient) error {
+	err := WithMasterServerClient(false, masterFn(), grpcDialOption, func(masterClient master_pb.SeaweedClient) error {
 
 		req := &master_pb.LookupVolumeRequest{
 			VolumeOrFileIds: unknown_vids,
@@ -87,8 +95,10 @@ func LookupVolumeIds(masterFn GetMasterFn, grpcDialOption grpc.DialOption, vids 
 			var locations []Location
 			for _, loc := range vidLocations.Locations {
 				locations = append(locations, Location{
-					Url:       loc.Url,
-					PublicUrl: loc.PublicUrl,
+					Url:        loc.Url,
+					PublicUrl:  loc.PublicUrl,
+					DataCenter: loc.DataCenter,
+					GrpcPort:   int(loc.GrpcPort),
 				})
 			}
 			if vidLocations.Error != "" {

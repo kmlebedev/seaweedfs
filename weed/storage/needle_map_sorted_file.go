@@ -3,10 +3,10 @@ package storage
 import (
 	"os"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/storage/erasure_coding"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle_map"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/storage/erasure_coding"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle_map"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 type SortedFileNeedleMap struct {
@@ -94,6 +94,9 @@ func (m *SortedFileNeedleMap) Delete(key NeedleId, offset Offset) error {
 }
 
 func (m *SortedFileNeedleMap) Close() {
+	if m == nil {
+		return
+	}
 	if m.indexFile != nil {
 		m.indexFile.Close()
 	}

@@ -4,10 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/remote_storage"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/remote_pb"
+	"github.com/seaweedfs/seaweedfs/weed/remote_storage"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 	"io"
 )
 
@@ -26,7 +27,7 @@ func (c *commandRemoteMetaSync) Help() string {
 	return `synchronize the local file meta data with the remote file metadata
 
 	# assume a remote storage is configured to name "cloud1"
-	remote.configure -name=cloud1 -type=s3 -access_key=xxx -secret_key=yyy
+	remote.configure -name=cloud1 -type=s3 -s3.access_key=xxx -s3.secret_key=yyy
 	# mount and pull one bucket
 	remote.mount -dir=/xxx -remote=cloud1/bucket
 
@@ -54,59 +55,68 @@ func (c *commandRemoteMetaSync) Do(args []string, commandEnv *CommandEnv, writer
 	}
 
 	mappings, localMountedDir, remoteStorageMountedLocation, remoteStorageConf, detectErr := detectMountInfo(commandEnv, writer, *dir)
-	if detectErr != nil{
+	if detectErr != nil {
 		jsonPrintln(writer, mappings)
 		return detectErr
 	}
 
 	// pull metadata from remote
 	if err = pullMetadata(commandEnv, writer, util.FullPath(localMountedDir), remoteStorageMountedLocation, util.FullPath(*dir), remoteStorageConf); err != nil {
-		return fmt.Errorf("cache content data: %v", err)
+		return fmt.Errorf("cache meta data: %v", err)
 	}
 
 	return nil
 }
 
-func detectMountInfo(commandEnv *CommandEnv, writer io.Writer, dir string) (*filer_pb.RemoteStorageMapping, string, *filer_pb.RemoteStorageLocation, *filer_pb.RemoteConf, error) {
+func detectMountInfo(commandEnv *CommandEnv, writer io.Writer, dir string) (*remote_pb.RemoteStorageMapping, string, *remote_pb.RemoteStorageLocation, *remote_pb.RemoteConf, error) {
 	return filer.DetectMountInfo(commandEnv.option.GrpcDialOption, commandEnv.option.FilerAddress, dir)
 }
 
 /*
-  This function update entry.RemoteEntry if the remote has any changes.
+This function update entry.RemoteEntry if the remote has any changes.
 
-  To pull remote updates, or created for the first time, the criteria is:
-    entry == nil or (entry.RemoteEntry != nil and entry.RemoteEntry.RemoteTag != remote.RemoteTag)
-  After the meta pull, the entry.RemoteEntry will have:
-    remoteEntry.LastLocalSyncTsNs == 0
-    Attributes.FileSize = uint64(remoteEntry.RemoteSize)
-    Attributes.Mtime = remoteEntry.RemoteMtime
-    remoteEntry.RemoteTag   = actual remote tag
-    chunks = nil
+To pull remote updates, or created for the first time, the criteria is:
 
-  When reading the file content or pulling the file content in "remote.cache", the criteria is:
-    Attributes.FileSize > 0 and len(chunks) == 0
-  After caching the file content, the entry.RemoteEntry will be
-    remoteEntry.LastLocalSyncTsNs == time.Now.UnixNano()
-    Attributes.FileSize = uint64(remoteEntry.RemoteSize)
-    Attributes.Mtime = remoteEntry.RemoteMtime
-    chunks = non-emtpy
+	entry == nil or (entry.RemoteEntry != nil and (entry.RemoteEntry.RemoteTag != remote.RemoteTag or entry.RemoteEntry.RemoteMTime < remote.RemoteMTime ))
 
-  When "weed filer.remote.sync" to upload local changes to remote, the criteria is:
-    Attributes.Mtime > remoteEntry.RemoteMtime
-  Right after "weed filer.remote.sync", the entry.RemoteEntry will be
-    remoteEntry.LastLocalSyncTsNs = time.Now.UnixNano()
-    remoteEntry.RemoteSize  = actual remote size, which should equal to entry.Attributes.FileSize
-    remoteEntry.RemoteMtime = actual remote mtime, which should be a little greater than entry.Attributes.Mtime
-    remoteEntry.RemoteTag   = actual remote tag
+After the meta pull, the entry.RemoteEntry will have:
 
+	remoteEntry.LastLocalSyncTsNs == 0
+	Attributes.FileSize = uint64(remoteEntry.RemoteSize)
+	Attributes.Mtime = remoteEntry.RemoteMtime
+	remoteEntry.RemoteTag   = actual remote tag
+	chunks = nil
 
-  If entry does not exists, need to pull meta
-  If entry.RemoteEntry == nil, this is a new local change and should not be overwritten
-  If entry.RemoteEntry.RemoteTag != remoteEntry.RemoteTag {
-    the remote version is updated, need to pull meta
-  }
- */
-func pullMetadata(commandEnv *CommandEnv, writer io.Writer, localMountedDir util.FullPath, remoteMountedLocation *filer_pb.RemoteStorageLocation, dirToCache util.FullPath, remoteConf *filer_pb.RemoteConf) error {
+When reading the file content or pulling the file content in "remote.cache", the criteria is:
+
+	Attributes.FileSize > 0 and len(chunks) == 0
+
+After caching the file content, the entry.RemoteEntry will be
+
+	remoteEntry.LastLocalSyncTsNs == time.Now.UnixNano()
+	Attributes.FileSize = uint64(remoteEntry.RemoteSize)
+	Attributes.Mtime = remoteEntry.RemoteMtime
+	chunks = non-empty
+
+When "weed filer.remote.sync" to upload local changes to remote, the criteria is:
+
+	Attributes.Mtime > remoteEntry.RemoteMtime
+
+Right after "weed filer.remote.sync", the entry.RemoteEntry will be
+
+	remoteEntry.LastLocalSyncTsNs = time.Now.UnixNano()
+	remoteEntry.RemoteSize  = actual remote size, which should equal to entry.Attributes.FileSize
+	remoteEntry.RemoteMtime = actual remote mtime, which should be a little greater than entry.Attributes.Mtime
+	remoteEntry.RemoteTag   = actual remote tag
+
+If entry does not exists, need to pull meta
+If entry.RemoteEntry == nil, this is a new local change and should not be overwritten
+
+	If entry.RemoteEntry.RemoteTag != remoteEntry.RemoteTag {
+	  the remote version is updated, need to pull meta
+	}
+*/
+func pullMetadata(commandEnv *CommandEnv, writer io.Writer, localMountedDir util.FullPath, remoteMountedLocation *remote_pb.RemoteStorageLocation, dirToCache util.FullPath, remoteConf *remote_pb.RemoteConf) error {
 
 	// visit remote storage
 	remoteStorage, err := remote_storage.GetRemoteStorage(remoteConf)
@@ -116,7 +126,7 @@ func pullMetadata(commandEnv *CommandEnv, writer io.Writer, localMountedDir util
 
 	remote := filer.MapFullPathToRemoteStorageLocation(localMountedDir, remoteMountedLocation, dirToCache)
 
-	err = commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	err = commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		ctx := context.Background()
 		err = remoteStorage.Traverse(remote, func(remoteDir, name string, isDirectory bool, remoteEntry *filer_pb.RemoteEntry) error {
 			localDir := filer.MapRemoteStorageLocationPathToFullPath(localMountedDir, remoteMountedLocation, remoteDir)
@@ -157,7 +167,7 @@ func pullMetadata(commandEnv *CommandEnv, writer io.Writer, localMountedDir util
 					fmt.Fprintln(writer, " (skip)")
 					return nil
 				}
-				if existingEntry.RemoteEntry.RemoteETag != remoteEntry.RemoteETag {
+				if existingEntry.RemoteEntry.RemoteETag != remoteEntry.RemoteETag || existingEntry.RemoteEntry.RemoteMtime < remoteEntry.RemoteMtime {
 					// the remote version is updated, need to pull meta
 					fmt.Fprintln(writer, " (update)")
 					return doSaveRemoteEntry(client, string(localDir), existingEntry, remoteEntry)

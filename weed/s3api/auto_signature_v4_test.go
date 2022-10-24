@@ -8,9 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"sort"
@@ -19,9 +17,11 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 )
 
-// TestIsRequestPresignedSignatureV4 - Test validates the logic for presign signature verision v4 detection.
+// TestIsRequestPresignedSignatureV4 - Test validates the logic for presign signature version v4 detection.
 func TestIsRequestPresignedSignatureV4(t *testing.T) {
 	testCases := []struct {
 		inputQueryKey   string
@@ -86,7 +86,7 @@ func TestIsReqAuthenticated(t *testing.T) {
 	// Validates all testcases.
 	for i, testCase := range testCases {
 		if _, s3Error := iam.reqSignatureV4Verify(testCase.req); s3Error != testCase.s3Error {
-			ioutil.ReadAll(testCase.req.Body)
+			io.ReadAll(testCase.req.Body)
 			t.Fatalf("Test %d: Unexpected S3 error: want %d - got %d", i, testCase.s3Error, s3Error)
 		}
 	}
@@ -138,7 +138,7 @@ func mustNewSignedRequest(method string, urlStr string, contentLength int64, bod
 	req := mustNewRequest(method, urlStr, contentLength, body, t)
 	cred := &Credential{"access_key_1", "secret_key_1"}
 	if err := signRequestV4(req, cred.AccessKey, cred.SecretKey); err != nil {
-		t.Fatalf("Unable to inititalized new signed http request %s", err)
+		t.Fatalf("Unable to initialized new signed http request %s", err)
 	}
 	return req
 }
@@ -149,7 +149,7 @@ func mustNewPresignedRequest(method string, urlStr string, contentLength int64, 
 	req := mustNewRequest(method, urlStr, contentLength, body, t)
 	cred := &Credential{"access_key_1", "secret_key_1"}
 	if err := preSignV4(req, cred.AccessKey, cred.SecretKey, int64(10*time.Minute.Seconds())); err != nil {
-		t.Fatalf("Unable to inititalized new signed http request %s", err)
+		t.Fatalf("Unable to initialized new signed http request %s", err)
 	}
 	return req
 }
@@ -167,7 +167,7 @@ func newTestRequest(method, urlStr string, contentLength int64, body io.ReadSeek
 	case body == nil:
 		hashedPayload = getSHA256Hash([]byte{})
 	default:
-		payloadBytes, err := ioutil.ReadAll(body)
+		payloadBytes, err := io.ReadAll(body)
 		if err != nil {
 			return nil, err
 		}

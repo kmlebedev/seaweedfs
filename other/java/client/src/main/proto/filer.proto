@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package filer_pb;
 
-option go_package = "github.com/chrislusf/seaweedfs/weed/pb/filer_pb";
+option go_package = "github.com/seaweedfs/seaweedfs/weed/pb/filer_pb";
 option java_package = "seaweedfs.client";
 option java_outer_classname = "FilerProto";
 
@@ -30,6 +30,8 @@ service SeaweedFiler {
 
     rpc AtomicRenameEntry (AtomicRenameEntryRequest) returns (AtomicRenameEntryResponse) {
     }
+    rpc StreamRenameEntry (StreamRenameEntryRequest) returns (stream StreamRenameEntryResponse) {
+    }
 
     rpc AssignVolume (AssignVolumeRequest) returns (AssignVolumeResponse) {
     }
@@ -46,6 +48,9 @@ service SeaweedFiler {
     rpc Statistics (StatisticsRequest) returns (StatisticsResponse) {
     }
 
+    rpc Ping (PingRequest) returns (PingResponse) {
+    }
+
     rpc GetFilerConfiguration (GetFilerConfigurationRequest) returns (GetFilerConfigurationResponse) {
     }
 
@@ -55,19 +60,13 @@ service SeaweedFiler {
     rpc SubscribeLocalMetadata (SubscribeMetadataRequest) returns (stream SubscribeMetadataResponse) {
     }
 
-    rpc KeepConnected (stream KeepConnectedRequest) returns (stream KeepConnectedResponse) {
-    }
-
-    rpc LocateBroker (LocateBrokerRequest) returns (LocateBrokerResponse) {
-    }
-
     rpc KvGet (KvGetRequest) returns (KvGetResponse) {
     }
 
     rpc KvPut (KvPutRequest) returns (KvPutResponse) {
     }
 
-    rpc DownloadToLocal (DownloadToLocalRequest) returns (DownloadToLocalResponse) {
+    rpc CacheRemoteObjectToLocalCluster (CacheRemoteObjectToLocalClusterRequest) returns (CacheRemoteObjectToLocalClusterResponse) {
     }
 }
 
@@ -112,6 +111,7 @@ message Entry {
     bytes content = 9; // if not empty, the file content
 
     RemoteEntry remote_entry = 10;
+    int64 quota = 11; // for bucket only. Positive/Negative means enabled/disabled.
 }
 
 message FullEntry {
@@ -160,14 +160,13 @@ message FuseAttributes {
     uint32 gid = 5;
     int64 crtime = 6; // unix time in seconds
     string mime = 7;
-    string replication = 8;
-    string collection = 9;
     int32 ttl_sec = 10;
     string user_name = 11; // for hdfs
     repeated string group_name = 12; // for hdfs
     string symlink_target = 13;
     bytes md5 = 14;
-    string disk_type = 15;
+    uint32 rdev = 16;
+    uint64 inode = 17;
 }
 
 message CreateEntryRequest {
@@ -176,6 +175,7 @@ message CreateEntryRequest {
     bool o_excl = 3;
     bool is_from_other_cluster = 4;
     repeated int32 signatures = 5;
+    bool skip_check_parent_directory = 6;
 }
 
 message CreateEntryResponse {
@@ -225,6 +225,18 @@ message AtomicRenameEntryRequest {
 message AtomicRenameEntryResponse {
 }
 
+message StreamRenameEntryRequest {
+    string old_directory = 1;
+    string old_name = 2;
+    string new_directory = 3;
+    string new_name = 4;
+    repeated int32 signatures = 5;
+}
+message StreamRenameEntryResponse {
+    string directory = 1;
+    EventNotification event_notification = 2;
+    int64 ts_ns = 3;
+}
 message AssignVolumeRequest {
     int32 count = 1;
     string collection = 2;
@@ -233,18 +245,18 @@ message AssignVolumeRequest {
     string data_center = 5;
     string path = 6;
     string rack = 7;
+    string data_node = 9;
     string disk_type = 8;
 }
 
 message AssignVolumeResponse {
     string file_id = 1;
-    string url = 2;
-    string public_url = 3;
     int32 count = 4;
     string auth = 5;
     string collection = 6;
     string replication = 7;
     string error = 8;
+    Location location = 9;
 }
 
 message LookupVolumeRequest {
@@ -258,6 +270,8 @@ message Locations {
 message Location {
     string url = 1;
     string public_url = 2;
+    uint32 grpc_port = 3;
+    string data_center = 4;
 }
 message LookupVolumeResponse {
     map<string, Locations> locations_map = 1;
@@ -292,6 +306,16 @@ message StatisticsResponse {
     uint64 file_count = 6;
 }
 
+message PingRequest {
+    string target = 1; // default to ping itself
+    string target_type = 2;
+}
+message PingResponse {
+    int64 start_time_ns = 1;
+    int64 remote_time_ns = 2;
+    int64 stop_time_ns = 3;
+}
+
 message GetFilerConfigurationRequest {
 }
 message GetFilerConfigurationResponse {
@@ -305,6 +329,8 @@ message GetFilerConfigurationResponse {
     string metrics_address = 9;
     int32 metrics_interval_sec = 10;
     string version = 11;
+    string cluster_id = 12;
+    string filer_group = 13;
 }
 
 message SubscribeMetadataRequest {
@@ -312,6 +338,11 @@ message SubscribeMetadataRequest {
     string path_prefix = 2;
     int64 since_ns = 3;
     int32 signature = 4;
+    repeated string path_prefixes = 6;
+    int32 client_id = 7;
+    int64 until_ns = 8;
+    int32 client_epoch = 9;
+    repeated string directories = 10;  // exact directory to watch
 }
 message SubscribeMetadataResponse {
     string directory = 1;
@@ -336,6 +367,7 @@ message KeepConnectedResponse {
 message LocateBrokerRequest {
     string resource = 1;
 }
+
 message LocateBrokerResponse {
     bool found = 1;
     // if found, send the exact address
@@ -379,6 +411,9 @@ message FilerConf {
         bool fsync = 6;
         uint32 volume_growth_count = 7;
         bool read_only = 8;
+        string data_center = 9;
+        string rack = 10;
+        string data_node = 11;
     }
     repeated PathConf locations = 2;
 }
@@ -386,27 +421,10 @@ message FilerConf {
 /////////////////////////
 // Remote Storage related
 /////////////////////////
-message RemoteConf {
-    string type = 1;
-    string name = 2;
-    string s3_access_key = 4;
-    string s3_secret_key = 5;
-    string s3_region = 6;
-    string s3_endpoint = 7;
-}
-
-message RemoteStorageMapping {
-    map<string,RemoteStorageLocation> mappings = 1;
-}
-message RemoteStorageLocation {
-    string name = 1;
-    string bucket = 2;
-    string path = 3;
-}
-message DownloadToLocalRequest {
+message CacheRemoteObjectToLocalClusterRequest {
     string directory = 1;
     string name = 2;
 }
-message DownloadToLocalResponse {
+message CacheRemoteObjectToLocalClusterResponse {
     Entry entry = 1;
 }

@@ -3,16 +3,16 @@ package redis
 import (
 	"context"
 	"fmt"
-	"sort"
+	"golang.org/x/exp/slices"
 	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 const (
@@ -35,19 +35,8 @@ func (store *UniversalRedisStore) RollbackTransaction(ctx context.Context) error
 
 func (store *UniversalRedisStore) InsertEntry(ctx context.Context, entry *filer.Entry) (err error) {
 
-	value, err := entry.EncodeAttributesAndChunks()
-	if err != nil {
-		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
-	}
-
-	if len(entry.Chunks) > 50 {
-		value = util.MaybeGzipData(value)
-	}
-
-	_, err = store.Client.Set(ctx, string(entry.FullPath), value, time.Duration(entry.TtlSec)*time.Second).Result()
-
-	if err != nil {
-		return fmt.Errorf("persisting %s : %v", entry.FullPath, err)
+	if err = store.doInsertEntry(ctx, entry); err != nil {
+		return err
 	}
 
 	dir, name := entry.FullPath.DirAndName()
@@ -61,9 +50,27 @@ func (store *UniversalRedisStore) InsertEntry(ctx context.Context, entry *filer.
 	return nil
 }
 
+func (store *UniversalRedisStore) doInsertEntry(ctx context.Context, entry *filer.Entry) error {
+	value, err := entry.EncodeAttributesAndChunks()
+	if err != nil {
+		return fmt.Errorf("encoding %s %+v: %v", entry.FullPath, entry.Attr, err)
+	}
+
+	if len(entry.Chunks) > filer.CountEntryChunksForGzip {
+		value = util.MaybeGzipData(value)
+	}
+
+	_, err = store.Client.Set(ctx, string(entry.FullPath), value, time.Duration(entry.TtlSec)*time.Second).Result()
+
+	if err != nil {
+		return fmt.Errorf("persisting %s : %v", entry.FullPath, err)
+	}
+	return nil
+}
+
 func (store *UniversalRedisStore) UpdateEntry(ctx context.Context, entry *filer.Entry) (err error) {
 
-	return store.InsertEntry(ctx, entry)
+	return store.doInsertEntry(ctx, entry)
 }
 
 func (store *UniversalRedisStore) FindEntry(ctx context.Context, fullpath util.FullPath) (entry *filer.Entry, err error) {
@@ -120,6 +127,8 @@ func (store *UniversalRedisStore) DeleteFolderChildren(ctx context.Context, full
 		if err != nil {
 			return fmt.Errorf("delete %s in parent dir: %v", fullpath, err)
 		}
+		// not efficient, but need to remove if it is a directory
+		store.Client.Del(ctx, genDirectoryListKey(string(path)))
 	}
 
 	return nil
@@ -155,8 +164,8 @@ func (store *UniversalRedisStore) ListDirectoryEntries(ctx context.Context, dirP
 	}
 
 	// sort
-	sort.Slice(members, func(i, j int) bool {
-		return strings.Compare(members[i], members[j]) < 0
+	slices.SortFunc(members, func(a, b string) bool {
+		return strings.Compare(a, b) < 0
 	})
 
 	// limit

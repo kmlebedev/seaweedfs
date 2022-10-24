@@ -3,21 +3,31 @@ package filer
 import (
 	"bytes"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/wdclient"
 	"io"
 	"math"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"github.com/seaweedfs/seaweedfs/weed/wdclient"
 
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 const (
 	ManifestBatch = 10000
 )
+
+var bytesBufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
 
 func HasChunkManifest(chunks []*filer_pb.FileChunk) bool {
 	for _, chunk := range chunks {
@@ -54,17 +64,17 @@ func ResolveChunkManifest(lookupFileIdFn wdclient.LookupFileIdFunctionType, chun
 
 		resolvedChunks, err := ResolveOneChunkManifest(lookupFileIdFn, chunk)
 		if err != nil {
-			return chunks, nil, err
+			return dataChunks, nil, err
 		}
 
 		manifestChunks = append(manifestChunks, chunk)
 		// recursive
-		dchunks, mchunks, subErr := ResolveChunkManifest(lookupFileIdFn, resolvedChunks, startOffset, stopOffset)
+		subDataChunks, subManifestChunks, subErr := ResolveChunkManifest(lookupFileIdFn, resolvedChunks, startOffset, stopOffset)
 		if subErr != nil {
-			return chunks, nil, subErr
+			return dataChunks, nil, subErr
 		}
-		dataChunks = append(dataChunks, dchunks...)
-		manifestChunks = append(manifestChunks, mchunks...)
+		dataChunks = append(dataChunks, subDataChunks...)
+		manifestChunks = append(manifestChunks, subManifestChunks...)
 	}
 	return
 }
@@ -75,12 +85,15 @@ func ResolveOneChunkManifest(lookupFileIdFn wdclient.LookupFileIdFunctionType, c
 	}
 
 	// IsChunkManifest
-	data, err := fetchChunk(lookupFileIdFn, chunk.GetFileIdString(), chunk.CipherKey, chunk.IsCompressed)
+	bytesBuffer := bytesBufferPool.Get().(*bytes.Buffer)
+	bytesBuffer.Reset()
+	defer bytesBufferPool.Put(bytesBuffer)
+	err := fetchWholeChunk(bytesBuffer, lookupFileIdFn, chunk.GetFileIdString(), chunk.CipherKey, chunk.IsCompressed)
 	if err != nil {
 		return nil, fmt.Errorf("fail to read manifest %s: %v", chunk.GetFileIdString(), err)
 	}
 	m := &filer_pb.FileChunkManifest{}
-	if err := proto.Unmarshal(data, m); err != nil {
+	if err := proto.Unmarshal(bytesBuffer.Bytes(), m); err != nil {
 		return nil, fmt.Errorf("fail to unmarshal manifest %s: %v", chunk.GetFileIdString(), err)
 	}
 
@@ -90,26 +103,43 @@ func ResolveOneChunkManifest(lookupFileIdFn wdclient.LookupFileIdFunctionType, c
 }
 
 // TODO fetch from cache for weed mount?
-func fetchChunk(lookupFileIdFn wdclient.LookupFileIdFunctionType, fileId string, cipherKey []byte, isGzipped bool) ([]byte, error) {
+func fetchWholeChunk(bytesBuffer *bytes.Buffer, lookupFileIdFn wdclient.LookupFileIdFunctionType, fileId string, cipherKey []byte, isGzipped bool) error {
 	urlStrings, err := lookupFileIdFn(fileId)
 	if err != nil {
 		glog.Errorf("operation LookupFileId %s failed, err: %v", fileId, err)
-		return nil, err
+		return err
 	}
-	return retriedFetchChunkData(urlStrings, cipherKey, isGzipped, true, 0, 0)
+	err = retriedStreamFetchChunkData(bytesBuffer, urlStrings, cipherKey, isGzipped, true, 0, 0)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func retriedFetchChunkData(urlStrings []string, cipherKey []byte, isGzipped bool, isFullChunk bool, offset int64, size int) ([]byte, error) {
+func fetchChunkRange(buffer []byte, lookupFileIdFn wdclient.LookupFileIdFunctionType, fileId string, cipherKey []byte, isGzipped bool, offset int64) (int, error) {
+	urlStrings, err := lookupFileIdFn(fileId)
+	if err != nil {
+		glog.Errorf("operation LookupFileId %s failed, err: %v", fileId, err)
+		return 0, err
+	}
+	return retriedFetchChunkData(buffer, urlStrings, cipherKey, isGzipped, false, offset)
+}
 
-	var err error
+func retriedFetchChunkData(buffer []byte, urlStrings []string, cipherKey []byte, isGzipped bool, isFullChunk bool, offset int64) (n int, err error) {
+
 	var shouldRetry bool
-	receivedData := make([]byte, 0, size)
 
 	for waitTime := time.Second; waitTime < util.RetryWaitTime; waitTime += waitTime / 2 {
 		for _, urlString := range urlStrings {
-			receivedData = receivedData[:0]
-			shouldRetry, err = util.ReadUrlAsStream(urlString+"?readDeleted=true", cipherKey, isGzipped, isFullChunk, offset, size, func(data []byte) {
-				receivedData = append(receivedData, data...)
+			n = 0
+			if strings.Contains(urlString, "%") {
+				urlString = url.PathEscape(urlString)
+			}
+			shouldRetry, err = util.ReadUrlAsStream(urlString+"?readDeleted=true", cipherKey, isGzipped, isFullChunk, offset, len(buffer), func(data []byte) {
+				if n < len(buffer) {
+					x := copy(buffer[n:], data)
+					n += x
+				}
 			})
 			if !shouldRetry {
 				break
@@ -128,7 +158,7 @@ func retriedFetchChunkData(urlStrings []string, cipherKey []byte, isGzipped bool
 		}
 	}
 
-	return receivedData, err
+	return n, err
 
 }
 
@@ -139,22 +169,28 @@ func retriedStreamFetchChunkData(writer io.Writer, urlStrings []string, cipherKe
 
 	for waitTime := time.Second; waitTime < util.RetryWaitTime; waitTime += waitTime / 2 {
 		for _, urlString := range urlStrings {
-			var localProcesed int
+			var localProcessed int
+			var writeErr error
 			shouldRetry, err = util.ReadUrlAsStream(urlString+"?readDeleted=true", cipherKey, isGzipped, isFullChunk, offset, size, func(data []byte) {
-				if totalWritten > localProcesed {
-					toBeSkipped := totalWritten - localProcesed
+				if totalWritten > localProcessed {
+					toBeSkipped := totalWritten - localProcessed
 					if len(data) <= toBeSkipped {
-						localProcesed += len(data)
+						localProcessed += len(data)
 						return // skip if already processed
 					}
 					data = data[toBeSkipped:]
-					localProcesed += toBeSkipped
+					localProcessed += toBeSkipped
 				}
-				writer.Write(data)
-				localProcesed += len(data)
-				totalWritten += len(data)
+				var writtenCount int
+				writtenCount, writeErr = writer.Write(data)
+				localProcessed += writtenCount
+				totalWritten += writtenCount
 			})
 			if !shouldRetry {
+				break
+			}
+			if writeErr != nil {
+				err = writeErr
 				break
 			}
 			if err != nil {
@@ -228,7 +264,7 @@ func mergeIntoManifest(saveFunc SaveDataAsChunkFunctionType, dataChunks []*filer
 		}
 	}
 
-	manifestChunk, _, _, err = saveFunc(bytes.NewReader(data), "", 0)
+	manifestChunk, err = saveFunc(bytes.NewReader(data), "", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -239,4 +275,4 @@ func mergeIntoManifest(saveFunc SaveDataAsChunkFunctionType, dataChunks []*filer
 	return
 }
 
-type SaveDataAsChunkFunctionType func(reader io.Reader, name string, offset int64) (chunk *filer_pb.FileChunk, collection, replication string, err error)
+type SaveDataAsChunkFunctionType func(reader io.Reader, name string, offset int64) (chunk *filer_pb.FileChunk, err error)

@@ -3,18 +3,22 @@ package weed_server
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/operation"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/pb/volume_server_pb"
-	"github.com/chrislusf/seaweedfs/weed/storage/needle"
-	"github.com/chrislusf/seaweedfs/weed/util"
-	"github.com/golang/protobuf/proto"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/operation"
+	"github.com/seaweedfs/seaweedfs/weed/pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/remote_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/volume_server_pb"
+	"github.com/seaweedfs/seaweedfs/weed/storage/needle"
+	"github.com/seaweedfs/seaweedfs/weed/util"
+	"google.golang.org/protobuf/proto"
 )
 
-func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.DownloadToLocalRequest) (*filer_pb.DownloadToLocalResponse, error) {
+func (fs *FilerServer) CacheRemoteObjectToLocalCluster(ctx context.Context, req *filer_pb.CacheRemoteObjectToLocalClusterRequest) (*filer_pb.CacheRemoteObjectToLocalClusterResponse, error) {
 
 	// load all mappings
 	mappingEntry, err := fs.filer.FindEntry(ctx, util.JoinPath(filer.DirectoryEtcRemote, filer.REMOTE_STORAGE_MOUNT_FILE))
@@ -27,7 +31,7 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 	}
 
 	// find mapping
-	var remoteStorageMountedLocation *filer_pb.RemoteStorageLocation
+	var remoteStorageMountedLocation *remote_pb.RemoteStorageLocation
 	var localMountedDir string
 	for k, loc := range mappings.Mappings {
 		if strings.HasPrefix(req.Directory, k) {
@@ -43,7 +47,7 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 	if err != nil {
 		return nil, err
 	}
-	storageConf := &filer_pb.RemoteConf{}
+	storageConf := &remote_pb.RemoteConf{}
 	if unMarshalErr := proto.Unmarshal(storageConfEntry.Content, storageConf); unMarshalErr != nil {
 		return nil, fmt.Errorf("unmarshal remote storage conf %s/%s: %v", filer.DirectoryEtcRemote, remoteStorageMountedLocation.Name+filer.REMOTE_STORAGE_CONF_SUFFIX, unMarshalErr)
 	}
@@ -54,14 +58,13 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 		return nil, err
 	}
 
-	resp := &filer_pb.DownloadToLocalResponse{}
+	resp := &filer_pb.CacheRemoteObjectToLocalClusterResponse{}
 	if entry.Remote == nil || entry.Remote.RemoteSize == 0 {
 		return resp, nil
 	}
 
 	// detect storage option
-	// replication level is set to "000" to ensure only need to ask one volume server to fetch the data.
-	so, err := fs.detectStorageOption(req.Directory, "", "000", 0, "", "", "")
+	so, err := fs.detectStorageOption(req.Directory, "", "", 0, "", "", "", "")
 	if err != nil {
 		return resp, err
 	}
@@ -79,12 +82,15 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 
 	var chunks []*filer_pb.FileChunk
 	var fetchAndWriteErr error
+	var wg sync.WaitGroup
 
 	limitedConcurrentExecutor := util.NewLimitedConcurrentExecutor(8)
 	for offset := int64(0); offset < entry.Remote.RemoteSize; offset += chunkSize {
 		localOffset := offset
 
+		wg.Add(1)
 		limitedConcurrentExecutor.Execute(func() {
+			defer wg.Done()
 			size := chunkSize
 			if localOffset+chunkSize > entry.Remote.RemoteSize {
 				size = entry.Remote.RemoteSize - localOffset
@@ -106,22 +112,32 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 				return
 			}
 
+			var replicas []*volume_server_pb.FetchAndWriteNeedleRequest_Replica
+			for _, r := range assignResult.Replicas {
+				replicas = append(replicas, &volume_server_pb.FetchAndWriteNeedleRequest_Replica{
+					Url:       r.Url,
+					PublicUrl: r.PublicUrl,
+					GrpcPort:  int32(r.GrpcPort),
+				})
+			}
+
 			// tell filer to tell volume server to download into needles
-			err = operation.WithVolumeServerClient(assignResult.Url, fs.grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
+			assignedServerAddress := pb.NewServerAddressWithGrpcPort(assignResult.Url, assignResult.GrpcPort)
+			err = operation.WithVolumeServerClient(false, assignedServerAddress, fs.grpcDialOption, func(volumeServerClient volume_server_pb.VolumeServerClient) error {
 				_, fetchAndWriteErr := volumeServerClient.FetchAndWriteNeedle(context.Background(), &volume_server_pb.FetchAndWriteNeedleRequest{
-					VolumeId:     uint32(fileId.VolumeId),
-					NeedleId:     uint64(fileId.Key),
-					Cookie:       uint32(fileId.Cookie),
-					Offset:       localOffset,
-					Size:         size,
-					RemoteType:   storageConf.Type,
-					RemoteName:   storageConf.Name,
-					S3AccessKey:  storageConf.S3AccessKey,
-					S3SecretKey:  storageConf.S3SecretKey,
-					S3Region:     storageConf.S3Region,
-					S3Endpoint:   storageConf.S3Endpoint,
-					RemoteBucket: remoteStorageMountedLocation.Bucket,
-					RemotePath:   string(dest),
+					VolumeId:   uint32(fileId.VolumeId),
+					NeedleId:   uint64(fileId.Key),
+					Cookie:     uint32(fileId.Cookie),
+					Offset:     localOffset,
+					Size:       size,
+					Replicas:   replicas,
+					Auth:       string(assignResult.Auth),
+					RemoteConf: storageConf,
+					RemoteLocation: &remote_pb.RemoteStorageLocation{
+						Name:   remoteStorageMountedLocation.Name,
+						Bucket: remoteStorageMountedLocation.Bucket,
+						Path:   string(dest),
+					},
 				})
 				if fetchAndWriteErr != nil {
 					return fmt.Errorf("volume server %s fetchAndWrite %s: %v", assignResult.Url, dest, fetchAndWriteErr)
@@ -129,7 +145,7 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 				return nil
 			})
 
-			if err != nil {
+			if err != nil && fetchAndWriteErr == nil {
 				fetchAndWriteErr = err
 				return
 			}
@@ -148,6 +164,7 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 		})
 	}
 
+	wg.Wait()
 	if fetchAndWriteErr != nil {
 		return nil, fetchAndWriteErr
 	}
@@ -162,6 +179,7 @@ func (fs *FilerServer) DownloadToLocal(ctx context.Context, req *filer_pb.Downlo
 	// this skips meta data log events
 
 	if err := fs.filer.Store.UpdateEntry(context.Background(), newEntry); err != nil {
+		fs.filer.DeleteChunks(chunks)
 		return nil, err
 	}
 	fs.filer.DeleteChunks(garbage)

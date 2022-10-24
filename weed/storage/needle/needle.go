@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/images"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/images"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 )
 
 const (
@@ -31,9 +31,9 @@ type Needle struct {
 	Data         []byte `comment:"The actual file data"`
 	Flags        byte   `comment:"boolean flags"` //version2
 	NameSize     uint8  //version2
-	Name         []byte `comment:"maximum 256 characters"` //version2
+	Name         []byte `comment:"maximum 255 characters"` //version2
 	MimeSize     uint8  //version2
-	Mime         []byte `comment:"maximum 256 characters"` //version2
+	Mime         []byte `comment:"maximum 255 characters"` //version2
 	PairsSize    uint16 //version2
 	Pairs        []byte `comment:"additional name value pairs, json format, maximum 64kB"`
 	LastModified uint64 //only store LastModifiedBytesLength bytes, which is 5 bytes to disk
@@ -142,6 +142,14 @@ func (n *Needle) ParsePath(fid string) (err error) {
 	return err
 }
 
+func GetAppendAtNs(volumeLastAppendAtNs uint64) uint64 {
+	return max(uint64(time.Now().UnixNano()), volumeLastAppendAtNs+1)
+}
+
+func (n *Needle) UpdateAppendAtNs(volumeLastAppendAtNs uint64) {
+	n.AppendAtNs = max(uint64(time.Now().UnixNano()), volumeLastAppendAtNs+1)
+}
+
 func ParseNeedleIdCookie(key_hash_string string) (NeedleId, Cookie, error) {
 	if len(key_hash_string) <= CookieSize*2 {
 		return NeedleIdEmpty, 0, fmt.Errorf("KeyHash is too short.")
@@ -163,4 +171,11 @@ func ParseNeedleIdCookie(key_hash_string string) (NeedleId, Cookie, error) {
 
 func (n *Needle) LastModifiedString() string {
 	return time.Unix(int64(n.LastModified), 0).Format("2006-01-02T15:04:05")
+}
+
+func max(x, y uint64) uint64 {
+	if x <= y {
+		return y
+	}
+	return x
 }

@@ -1,15 +1,17 @@
 package shell
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func init() {
@@ -17,6 +19,7 @@ func init() {
 }
 
 type commandFsMetaLoad struct {
+	dirPrefix *string
 }
 
 func (c *commandFsMetaLoad) Name() string {
@@ -27,6 +30,8 @@ func (c *commandFsMetaLoad) Help() string {
 	return `load saved filer meta data to restore the directory and file structure
 
 	fs.meta.load <filer_host>-<port>-<time>.meta
+	fs.meta.load -v=false <filer_host>-<port>-<time>.meta // skip printing out the verbose output
+	fs.meta.load -dirPrefix=/buckets/important* <filer_host>.meta // load any dirs with prefix "important"
 
 `
 }
@@ -40,6 +45,13 @@ func (c *commandFsMetaLoad) Do(args []string, commandEnv *CommandEnv, writer io.
 
 	fileName := args[len(args)-1]
 
+	metaLoadCommand := flag.NewFlagSet(c.Name(), flag.ContinueOnError)
+	c.dirPrefix = metaLoadCommand.String("dirPrefix", "", "load entries only with directories matching prefix")
+	verbose := metaLoadCommand.Bool("v", true, "verbose mode")
+	if err = metaLoadCommand.Parse(args[0 : len(args)-1]); err != nil {
+		return nil
+	}
+
 	dst, err := os.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		return nil
@@ -47,8 +59,9 @@ func (c *commandFsMetaLoad) Do(args []string, commandEnv *CommandEnv, writer io.
 	defer dst.Close()
 
 	var dirCount, fileCount uint64
+	lastLogTime := time.Now()
 
-	err = commandEnv.WithFilerClient(func(client filer_pb.SeaweedFilerClient) error {
+	err = commandEnv.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 
 		sizeBuf := make([]byte, 4)
 
@@ -73,6 +86,24 @@ func (c *commandFsMetaLoad) Do(args []string, commandEnv *CommandEnv, writer io.
 				return err
 			}
 
+			// check collection name pattern
+			entryFullName := string(util.FullPath(fullEntry.Dir).Child(fullEntry.Entry.Name))
+			if *c.dirPrefix != "" {
+				if !strings.HasPrefix(fullEntry.Dir, *c.dirPrefix) {
+					if *verbose {
+						fmt.Fprintf(writer, "not match dir prefix %s\n", entryFullName)
+					}
+					continue
+				}
+			}
+
+			if *verbose || lastLogTime.Add(time.Second).Before(time.Now()) {
+				if !*verbose {
+					lastLogTime = time.Now()
+				}
+				fmt.Fprintf(writer, "load %s\n", entryFullName)
+			}
+
 			fullEntry.Entry.Name = strings.ReplaceAll(fullEntry.Entry.Name, "/", "x")
 			if err := filer_pb.CreateEntry(client, &filer_pb.CreateEntryRequest{
 				Directory: fullEntry.Dir,
@@ -80,8 +111,6 @@ func (c *commandFsMetaLoad) Do(args []string, commandEnv *CommandEnv, writer io.
 			}); err != nil {
 				return err
 			}
-
-			fmt.Fprintf(writer, "load %s\n", util.FullPath(fullEntry.Dir).Child(fullEntry.Entry.Name))
 
 			if fullEntry.Entry.IsDirectory {
 				dirCount++

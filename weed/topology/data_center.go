@@ -1,7 +1,8 @@
 package topology
 
 import (
-	"github.com/chrislusf/seaweedfs/weed/pb/master_pb"
+	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
+	"golang.org/x/exp/slices"
 )
 
 type DataCenter struct {
@@ -19,27 +20,37 @@ func NewDataCenter(id string) *DataCenter {
 }
 
 func (dc *DataCenter) GetOrCreateRack(rackName string) *Rack {
-	for _, c := range dc.Children() {
+	dc.Lock()
+	defer dc.Unlock()
+	for _, c := range dc.children {
 		rack := c.(*Rack)
 		if string(rack.Id()) == rackName {
 			return rack
 		}
 	}
 	rack := NewRack(rackName)
-	dc.LinkChildNode(rack)
+	dc.doLinkChildNode(rack)
 	return rack
 }
 
-func (dc *DataCenter) ToMap() interface{} {
-	m := make(map[string]interface{})
-	m["Id"] = dc.Id()
-	var racks []interface{}
+type DataCenterInfo struct {
+	Id    NodeId     `json:"Id"`
+	Racks []RackInfo `json:"Racks"`
+}
+
+func (dc *DataCenter) ToInfo() (info DataCenterInfo) {
+	info.Id = dc.Id()
+	var racks []RackInfo
 	for _, c := range dc.Children() {
 		rack := c.(*Rack)
-		racks = append(racks, rack.ToMap())
+		racks = append(racks, rack.ToInfo())
 	}
-	m["Racks"] = racks
-	return m
+
+	slices.SortFunc(racks, func(a, b RackInfo) bool {
+		return a.Id < b.Id
+	})
+	info.Racks = racks
+	return
 }
 
 func (dc *DataCenter) ToDataCenterInfo() *master_pb.DataCenterInfo {

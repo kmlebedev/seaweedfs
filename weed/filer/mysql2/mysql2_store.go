@@ -4,18 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/chrislusf/seaweedfs/weed/filer"
-	"github.com/chrislusf/seaweedfs/weed/filer/abstract_sql"
-	"github.com/chrislusf/seaweedfs/weed/filer/mysql"
-	"github.com/chrislusf/seaweedfs/weed/util"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/seaweedfs/seaweedfs/weed/filer"
+	"github.com/seaweedfs/seaweedfs/weed/filer/abstract_sql"
+	"github.com/seaweedfs/seaweedfs/weed/filer/mysql"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 const (
 	CONNECTION_URL_PATTERN = "%s:%s@tcp(%s:%d)/%s?charset=utf8"
 )
+
+var _ filer.BucketAware = (*MysqlStore2)(nil)
 
 func init() {
 	filer.Stores = append(filer.Stores, &MysqlStore2{})
@@ -82,7 +85,7 @@ func (store *MysqlStore2) initialize(createTable, upsertQuery string, enableUpse
 		return fmt.Errorf("connect to %s error:%v", sqlUrl, err)
 	}
 
-	if err = store.CreateTable(context.Background(), abstract_sql.DEFAULT_TABLE); err != nil {
+	if err = store.CreateTable(context.Background(), abstract_sql.DEFAULT_TABLE); err != nil && !strings.Contains(err.Error(), "table already exist") {
 		return fmt.Errorf("init table %s: %v", abstract_sql.DEFAULT_TABLE, err)
 	}
 

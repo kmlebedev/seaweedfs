@@ -3,7 +3,7 @@ package filer_ui
 import (
 	"strings"
 
-	"github.com/chrislusf/seaweedfs/weed/util"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 type Breadcrumb struct {
@@ -15,8 +15,12 @@ func ToBreadcrumb(fullpath string) (crumbs []Breadcrumb) {
 	parts := strings.Split(fullpath, "/")
 
 	for i := 0; i < len(parts); i++ {
+		name := parts[i]
+		if name == "" {
+			name = "/"
+		}
 		crumb := Breadcrumb{
-			Name: parts[i] + " /",
+			Name: name,
 			Link: "/" + util.Join(parts[0:i+1]...),
 		}
 		if !strings.HasSuffix(crumb.Link, "/") {

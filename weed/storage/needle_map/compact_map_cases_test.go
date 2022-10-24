@@ -1,10 +1,11 @@
+//go:build 5BytesOffset
 // +build 5BytesOffset
 
 package needle_map
 
 import (
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"github.com/stretchr/testify/assert"
 	"log"
 	"os"

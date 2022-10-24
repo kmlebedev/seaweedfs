@@ -2,9 +2,26 @@ package needle_map
 
 import (
 	"fmt"
-	. "github.com/chrislusf/seaweedfs/weed/storage/types"
+	"github.com/seaweedfs/seaweedfs/weed/sequence"
+	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
+	"log"
+	"os"
 	"testing"
 )
+
+func TestSnowflakeSequencer(t *testing.T) {
+	m := NewCompactMap()
+	seq, _ := sequence.NewSnowflakeSequencer("for_test", 1)
+
+	for i := 0; i < 200000; i++ {
+		id := seq.NextFileId(1)
+		oldOffset, oldSize := m.Set(NeedleId(id), ToOffset(8), 3000073)
+		if oldSize != 0 {
+			t.Errorf("id %d oldOffset %v oldSize %d", id, oldOffset, oldSize)
+		}
+	}
+
+}
 
 func TestOverflow2(t *testing.T) {
 	m := NewCompactMap()
@@ -163,4 +180,41 @@ func TestOverflow(t *testing.T) {
 	}
 	println()
 
+}
+
+func TestCompactSection_Get(t *testing.T) {
+	var maps []*CompactMap
+	totalRowCount := uint64(0)
+	indexFile, ie := os.OpenFile("../../../test/data/sample.idx",
+		os.O_RDWR|os.O_RDONLY, 0644)
+	defer indexFile.Close()
+	if ie != nil {
+		log.Fatalln(ie)
+	}
+
+	m, rowCount := loadNewNeedleMap(indexFile)
+	maps = append(maps, m)
+	totalRowCount += rowCount
+	m.Set(1574318345753513987, ToOffset(10002), 10002)
+	nv,ok := m.Get(1574318345753513987)
+	if ok {
+		t.Log(uint64(nv.Key))
+	}
+
+	nv1, ok := m.Get(1574318350048481283)
+	if ok {
+		t.Error(uint64(nv1.Key))
+	}
+
+	m.Set(1574318350048481283, ToOffset(10002), 10002)
+	nv2,ok1 := m.Get(1574318350048481283)
+	if ok1 {
+		t.Log(uint64(nv2.Key))
+	}
+
+	m.Delete(nv2.Key)
+	nv3,has := m.Get(nv2.Key)
+	if has && nv3.Size > 0 {
+		t.Error(uint64(nv3.Size))
+	}
 }

@@ -3,33 +3,38 @@ package pb
 import (
 	"context"
 	"fmt"
-	"github.com/chrislusf/seaweedfs/weed/glog"
-	"github.com/chrislusf/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 	"google.golang.org/grpc"
 	"io"
 	"time"
 )
 
+type EventErrorType int
+
+const (
+	TrivialOnError EventErrorType = iota
+	FatalOnError
+	RetryForeverOnError
+)
+
 type ProcessMetadataFunc func(resp *filer_pb.SubscribeMetadataResponse) error
 
-func FollowMetadata(filerAddress string, grpcDialOption grpc.DialOption,
-	clientName string, pathPrefix string, lastTsNs int64, selfSignature int32,
-	processEventFn ProcessMetadataFunc, fatalOnError bool) error {
+func FollowMetadata(filerAddress ServerAddress, grpcDialOption grpc.DialOption, clientName string, clientId int32, clientEpoch int32,
+	pathPrefix string, additionalPathPrefixes []string, lastTsNs int64, untilTsNs int64, selfSignature int32,
+	processEventFn ProcessMetadataFunc, eventErrorType EventErrorType) error {
 
-	err := WithFilerClient(filerAddress, grpcDialOption, makeFunc(
-		clientName, pathPrefix, lastTsNs, selfSignature, processEventFn, fatalOnError))
+	err := WithFilerClient(true, filerAddress, grpcDialOption, makeSubscribeMetadataFunc(clientName, clientId, clientEpoch, pathPrefix, additionalPathPrefixes, nil, &lastTsNs, untilTsNs, selfSignature, processEventFn, eventErrorType))
 	if err != nil {
 		return fmt.Errorf("subscribing filer meta change: %v", err)
 	}
 	return err
 }
 
-func WithFilerClientFollowMetadata(filerClient filer_pb.FilerClient,
-	clientName string, pathPrefix string, lastTsNs int64, selfSignature int32,
-	processEventFn ProcessMetadataFunc, fatalOnError bool) error {
+func WithFilerClientFollowMetadata(filerClient filer_pb.FilerClient, clientName string, clientId int32, clientEpoch int32, pathPrefix string, directoriesToWatch []string, lastTsNs *int64, untilTsNs int64, selfSignature int32, processEventFn ProcessMetadataFunc, eventErrorType EventErrorType) error {
 
-	err := filerClient.WithFilerClient(makeFunc(
-		clientName, pathPrefix, lastTsNs, selfSignature, processEventFn, fatalOnError))
+	err := filerClient.WithFilerClient(true, makeSubscribeMetadataFunc(clientName, clientId, clientEpoch, pathPrefix, nil, directoriesToWatch, lastTsNs, untilTsNs, selfSignature, processEventFn, eventErrorType))
 	if err != nil {
 		return fmt.Errorf("subscribing filer meta change: %v", err)
 	}
@@ -37,16 +42,20 @@ func WithFilerClientFollowMetadata(filerClient filer_pb.FilerClient,
 	return nil
 }
 
-func makeFunc(clientName string, pathPrefix string, lastTsNs int64, selfSignature int32,
-	processEventFn ProcessMetadataFunc, fatalOnError bool) func(client filer_pb.SeaweedFilerClient) error {
+func makeSubscribeMetadataFunc(clientName string, clientId int32, clientEpoch int32, pathPrefix string, additionalPathPrefixes []string, directoriesToWatch []string, lastTsNs *int64, untilTsNs int64, selfSignature int32, processEventFn ProcessMetadataFunc, eventErrorType EventErrorType) func(client filer_pb.SeaweedFilerClient) error {
 	return func(client filer_pb.SeaweedFilerClient) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		stream, err := client.SubscribeMetadata(ctx, &filer_pb.SubscribeMetadataRequest{
-			ClientName: clientName,
-			PathPrefix: pathPrefix,
-			SinceNs:    lastTsNs,
-			Signature:  selfSignature,
+			ClientName:   clientName,
+			PathPrefix:   pathPrefix,
+			PathPrefixes: additionalPathPrefixes,
+			Directories:  directoriesToWatch,
+			SinceNs:      *lastTsNs,
+			Signature:    selfSignature,
+			ClientId:     clientId,
+			ClientEpoch:  clientEpoch,
+			UntilNs:      untilTsNs,
 		})
 		if err != nil {
 			return fmt.Errorf("subscribe: %v", err)
@@ -62,13 +71,23 @@ func makeFunc(clientName string, pathPrefix string, lastTsNs int64, selfSignatur
 			}
 
 			if err := processEventFn(resp); err != nil {
-				if fatalOnError {
+				switch eventErrorType {
+				case TrivialOnError:
+					glog.Errorf("process %v: %v", resp, err)
+				case FatalOnError:
 					glog.Fatalf("process %v: %v", resp, err)
-				} else {
+				case RetryForeverOnError:
+					util.RetryForever("followMetaUpdates", func() error {
+						return processEventFn(resp)
+					}, func(err error) bool {
+						glog.Errorf("process %v: %v", resp, err)
+						return true
+					})
+				default:
 					glog.Errorf("process %v: %v", resp, err)
 				}
 			}
-			lastTsNs = resp.TsNs
+			*lastTsNs = resp.TsNs
 		}
 	}
 }
@@ -82,11 +101,11 @@ func AddOffsetFunc(processEventFn ProcessMetadataFunc, offsetInterval time.Durat
 		}
 		counter++
 		if lastWriteTime.Add(offsetInterval).Before(time.Now()) {
-			counter = 0
 			lastWriteTime = time.Now()
 			if err := offsetFunc(counter, resp.TsNs); err != nil {
 				return err
 			}
+			counter = 0
 		}
 		return nil
 	}

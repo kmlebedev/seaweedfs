@@ -23,8 +23,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"github.com/chrislusf/seaweedfs/weed/s3api/s3err"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -33,6 +32,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 )
 
 func (iam *IdentityAccessManagement) reqSignatureV4Verify(r *http.Request) (*Identity, s3err.ErrorCode) {
@@ -135,9 +136,9 @@ func (iam *IdentityAccessManagement) doesSignatureMatch(hashedPayload string, r 
 
 	// Get hashed Payload
 	if signV4Values.Credential.scope.service != "s3" && hashedPayload == emptySHA256 && r.Body != nil {
-		buf, _ := ioutil.ReadAll(r.Body)
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(buf))
-		b, _ := ioutil.ReadAll(bytes.NewBuffer(buf))
+		buf, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewBuffer(buf))
+		b, _ := io.ReadAll(bytes.NewBuffer(buf))
 		if len(b) != 0 {
 			bodyHash := sha256.Sum256(b)
 			hashedPayload = hex.EncodeToString(bodyHash[:])
@@ -197,9 +198,8 @@ func (c credentialHeader) getScope() string {
 	}, "/")
 }
 
-//    Authorization: algorithm Credential=accessKeyID/credScope, \
-//            SignedHeaders=signedHeaders, Signature=signature
-//
+//	Authorization: algorithm Credential=accessKeyID/credScope, \
+//	        SignedHeaders=signedHeaders, Signature=signature
 func parseSignV4(v4Auth string) (sv signValues, aec s3err.ErrorCode) {
 	// Replace all spaced strings, some clients can send spaced
 	// parameters and some won't. So we pro-actively remove any spaces
@@ -225,7 +225,7 @@ func parseSignV4(v4Auth string) (sv signValues, aec s3err.ErrorCode) {
 	signV4Values := signValues{}
 
 	var err s3err.ErrorCode
-	// Save credentail values.
+	// Save credential values.
 	signV4Values.Credential, err = parseCredentialHeader(authFields[0])
 	if err != s3err.ErrNone {
 		return sv, err
@@ -309,7 +309,8 @@ func parseSignature(signElement string) (string, s3err.ErrorCode) {
 }
 
 // doesPolicySignatureMatch - Verify query headers with post policy
-//     - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html
+//   - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html
+//
 // returns ErrNone if the signature matches.
 func (iam *IdentityAccessManagement) doesPolicySignatureV4Match(formValues http.Header) s3err.ErrorCode {
 
@@ -340,7 +341,7 @@ func (iam *IdentityAccessManagement) doesPolicySignatureV4Match(formValues http.
 }
 
 // check query headers with presigned signature
-//  - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
+//   - http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
 func (iam *IdentityAccessManagement) doesPresignedSignatureMatch(hashedPayload string, r *http.Request) (*Identity, s3err.ErrorCode) {
 
 	// Copy request
@@ -433,7 +434,7 @@ func (iam *IdentityAccessManagement) doesPresignedSignatureMatch(hashedPayload s
 		}
 	}
 
-	/// Verify finally if signature is same.
+	// / Verify finally if signature is same.
 
 	// Get canonical request.
 	presignedCanonicalReq := getCanonicalRequest(extractedSignedHeaders, hashedPayload, encodedQuery, req.URL.Path, req.Method)
@@ -466,7 +467,7 @@ func contains(list []string, elem string) bool {
 	return false
 }
 
-// preSignValues data type represents structued form of AWS Signature V4 query string.
+// preSignValues data type represents structured form of AWS Signature V4 query string.
 type preSignValues struct {
 	signValues
 	Date    time.Time
@@ -475,12 +476,12 @@ type preSignValues struct {
 
 // Parses signature version '4' query string of the following form.
 //
-//   querystring = X-Amz-Algorithm=algorithm
-//   querystring += &X-Amz-Credential= urlencode(accessKey + '/' + credential_scope)
-//   querystring += &X-Amz-Date=date
-//   querystring += &X-Amz-Expires=timeout interval
-//   querystring += &X-Amz-SignedHeaders=signed_headers
-//   querystring += &X-Amz-Signature=signature
+//	querystring = X-Amz-Algorithm=algorithm
+//	querystring += &X-Amz-Credential= urlencode(accessKey + '/' + credential_scope)
+//	querystring += &X-Amz-Date=date
+//	querystring += &X-Amz-Expires=timeout interval
+//	querystring += &X-Amz-SignedHeaders=signed_headers
+//	querystring += &X-Amz-Signature=signature
 //
 // verifies if any of the necessary query params are missing in the presigned request.
 func doesV4PresignParamsExist(query url.Values) s3err.ErrorCode {
@@ -550,7 +551,7 @@ func parsePreSignV4(query url.Values) (psv preSignValues, aec s3err.ErrorCode) {
 		return psv, err
 	}
 
-	// Return structed form of signature query string.
+	// Return structured form of signature query string.
 	return preSignV4Values, s3err.ErrNone
 }
 
@@ -635,13 +636,13 @@ func getScope(t time.Time, region string) string {
 // getCanonicalRequest generate a canonical request of style
 //
 // canonicalRequest =
-//  <HTTPMethod>\n
-//  <CanonicalURI>\n
-//  <CanonicalQueryString>\n
-//  <CanonicalHeaders>\n
-//  <SignedHeaders>\n
-//  <HashedPayload>
 //
+//	<HTTPMethod>\n
+//	<CanonicalURI>\n
+//	<CanonicalQueryString>\n
+//	<CanonicalHeaders>\n
+//	<SignedHeaders>\n
+//	<HashedPayload>
 func getCanonicalRequest(extractedSignedHeaders http.Header, payload, queryStr, urlPath, method string) string {
 	rawQuery := strings.Replace(queryStr, "+", "%20", -1)
 	encodedPath := encodePath(urlPath)
