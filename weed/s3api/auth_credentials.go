@@ -2,7 +2,6 @@ package s3api
 
 import (
 	"fmt"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3account"
 	"net/http"
 	"os"
 	"strings"
@@ -17,10 +16,26 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 )
 
-var IdentityAnonymous = &Identity{
-	Name:      s3account.AccountAnonymous.Name,
-	AccountId: s3account.AccountAnonymous.Id,
-}
+// Predefined Accounts
+var (
+	// AccountAdmin is used as the default account for IAM-Credentials access without Account configured
+	AccountAdmin = Account{
+		Name:         "admin",
+		EmailAddress: "admin@example.com",
+		Id:           "admin",
+	}
+
+	// AccountAnonymous is used to represent the account for anonymous access
+	AccountAnonymous = Account{
+		Name:         "anonymous",
+		EmailAddress: "anonymous@example.com",
+		Id:           "anonymous",
+	}
+	IdentityAnonymous = &Identity{
+		Name:    AccountAnonymous.Name,
+		Account: &AccountAnonymous,
+	}
+)
 
 type Action string
 
@@ -32,27 +47,39 @@ type IdentityAccessManagement struct {
 	m sync.RWMutex
 
 	identities    []*Identity
+	credentials   map[string]*Identity
+	accounts      map[string]*Account
+	emails        map[string]*Account
 	isAuthEnabled bool
 	domain        string
 }
 
 type Identity struct {
 	Name        string
-	AccountId   string
+	Account     *Account
 	Credentials []*Credential
 	Actions     []Action
 }
 
+// Account represents a system user, a system user can
+// configure multiple IAM-Users, IAM-Users can configure
+// permissions respectively, and each IAM-User can
+// configure multiple security credentials
+type Account struct {
+	//Name is also used to display the "DisplayName" as the owner of the bucket or object
+	Name         string
+	EmailAddress string
+
+	//Id is used to identify an Account when granting cross-account access(ACLs) to buckets and objects
+	Id string
+}
+
 func (i *Identity) isAnonymous() bool {
-	return i.Name == s3account.AccountAnonymous.Name
+	return i.Account.Id == AccountAnonymous.Id
 }
 
 func (i *Identity) GetAccountId() string {
-	if i.AccountId != "" {
-		return i.AccountId
-	} else {
-		return i.Name
-	}
+	return i.Account.Id
 }
 
 type Credential struct {
@@ -72,14 +99,19 @@ func (action Action) overBucket(bucket string) bool {
 	return strings.HasSuffix(string(action), ":"+bucket) || strings.HasSuffix(string(action), ":*")
 }
 
+// "Permission": "FULL_CONTROL"|"WRITE"|"WRITE_ACP"|"READ"|"READ_ACP"
 func (action Action) getPermission() Permission {
 	switch act := strings.Split(string(action), ":")[0]; act {
 	case s3_constants.ACTION_ADMIN:
 		return Permission("FULL_CONTROL")
 	case s3_constants.ACTION_WRITE:
 		return Permission("WRITE")
+	case s3_constants.ACTION_WRITE_ACP:
+		return Permission("WRITE_ACP")
 	case s3_constants.ACTION_READ:
 		return Permission("READ")
+	case s3_constants.ACTION_READ_ACP:
+		return Permission("READ_ACP")
 	default:
 		return Permission("")
 	}
@@ -140,27 +172,69 @@ func (iam *IdentityAccessManagement) LoadS3ApiConfigurationFromBytes(content *[]
 }
 
 func (iam *IdentityAccessManagement) loadS3ApiConfiguration(config *iam_pb.S3ApiConfiguration) error {
+	accounts := make(map[string]*Account)
+	emails := make(map[string]*Account)
 	var identities []*Identity
+	credentials := make(map[string]*Identity)
+	foundAccountAnonymous := false
+	foundAccountAdmin := false
+	for _, account := range config.Accounts {
+		switch account.Id {
+		case AccountAdmin.Id:
+			AccountAdmin = Account{
+				Id:           account.Id,
+				Name:         account.Name,
+				EmailAddress: account.EmailAddress,
+			}
+			accounts[account.Id] = &AccountAdmin
+			foundAccountAdmin = true
+		case AccountAnonymous.Id:
+			AccountAnonymous = Account{
+				Id:           account.Id,
+				Name:         account.Name,
+				EmailAddress: account.EmailAddress,
+			}
+			accounts[account.Id] = &AccountAnonymous
+			foundAccountAnonymous = true
+		default:
+			t := Account{
+				Id:           account.Id,
+				Name:         account.Name,
+				EmailAddress: account.EmailAddress,
+			}
+			accounts[account.Id] = &t
+		}
+		if account.EmailAddress != "" {
+			emails[account.EmailAddress] = accounts[account.Id]
+		}
+	}
+	if !foundAccountAdmin {
+		accounts[AccountAdmin.Id] = &AccountAdmin
+		emails[AccountAdmin.EmailAddress] = &AccountAdmin
+	}
+	if !foundAccountAnonymous {
+		accounts[AccountAnonymous.Id] = &AccountAnonymous
+		emails[AccountAnonymous.EmailAddress] = &AccountAnonymous
+	}
 	for _, ident := range config.Identities {
 		t := &Identity{
 			Name:        ident.Name,
-			AccountId:   s3account.AccountAdmin.Id,
+			Account:     &AccountAdmin,
 			Credentials: nil,
 			Actions:     nil,
 		}
-
-		if ident.Name == s3account.AccountAnonymous.Name {
-			if ident.AccountId != "" && ident.AccountId != s3account.AccountAnonymous.Id {
+		switch {
+		case ident.Name == AccountAnonymous.Name:
+			if ident.AccountId != "" && ident.AccountId != AccountAnonymous.Id {
 				glog.Warningf("anonymous identity is associated with a non-anonymous account ID, the association is invalid")
 			}
-			t.AccountId = s3account.AccountAnonymous.Id
+			t.Account = &AccountAnonymous
 			IdentityAnonymous = t
-		} else {
-			if len(ident.AccountId) > 0 {
-				t.AccountId = ident.AccountId
+		default:
+			if account, ok := accounts[ident.AccountId]; ok {
+				t.Account = account
 			}
 		}
-
 		for _, action := range ident.Actions {
 			t.Actions = append(t.Actions, Action(action))
 		}
@@ -169,6 +243,7 @@ func (iam *IdentityAccessManagement) loadS3ApiConfiguration(config *iam_pb.S3Api
 				AccessKey: cred.AccessKey,
 				SecretKey: cred.SecretKey,
 			})
+			credentials[cred.AccessKey] = t
 		}
 		identities = append(identities, t)
 	}
@@ -176,6 +251,9 @@ func (iam *IdentityAccessManagement) loadS3ApiConfiguration(config *iam_pb.S3Api
 	iam.m.Lock()
 	// atomically switch
 	iam.identities = identities
+	iam.credentials = credentials
+	iam.accounts = accounts
+	iam.emails = emails
 	if !iam.isAuthEnabled { // one-directional, no toggling
 		iam.isAuthEnabled = len(identities) > 0
 	}
@@ -187,15 +265,27 @@ func (iam *IdentityAccessManagement) isEnabled() bool {
 	return iam.isAuthEnabled
 }
 
-func (iam *IdentityAccessManagement) lookupByAccessKey(accessKey string) (identity *Identity, cred *Credential, found bool) {
-
+func (iam *IdentityAccessManagement) LookupByAccountId(id string) (*Account, bool) {
 	iam.m.RLock()
 	defer iam.m.RUnlock()
-	for _, ident := range iam.identities {
-		for _, cred := range ident.Credentials {
-			// println("checking", ident.Name, cred.AccessKey)
-			if cred.AccessKey == accessKey {
-				return ident, cred, true
+	account, ok := iam.accounts[id]
+	return account, ok
+}
+
+func (iam *IdentityAccessManagement) LookupByEmail(email string) (*Account, bool) {
+	iam.m.RLock()
+	defer iam.m.RUnlock()
+	account, ok := iam.emails[email]
+	return account, ok
+}
+
+func (iam *IdentityAccessManagement) lookupByAccessKey(accessKey string) (identity *Identity, cred *Credential, found bool) {
+	iam.m.RLock()
+	defer iam.m.RUnlock()
+	if ident, ok := iam.credentials[accessKey]; ok {
+		for _, credential := range ident.Credentials {
+			if credential.AccessKey == accessKey {
+				return ident, credential, true
 			}
 		}
 	}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/seaweedfs/seaweedfs/weed/filer"
 	"github.com/seaweedfs/seaweedfs/weed/pb/s3_pb"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3account"
 	"net"
 	"net/http"
 	"strings"
@@ -44,7 +43,6 @@ type S3ApiServer struct {
 	randomClientId int32
 	filerGuard     *security.Guard
 	client         *http.Client
-	accountManager *s3account.AccountManager
 }
 
 func NewS3ApiServer(router *mux.Router, option *S3ApiServerOption) (s3ApiServer *S3ApiServer, err error) {
@@ -65,7 +63,6 @@ func NewS3ApiServer(router *mux.Router, option *S3ApiServerOption) (s3ApiServer 
 		cb:             NewCircuitBreaker(option),
 		bacp:           NewBucketAccessControlPolicies(),
 	}
-	s3ApiServer.accountManager = s3account.NewAccountManager(s3ApiServer)
 	s3ApiServer.bucketRegistry = NewBucketRegistry(s3ApiServer)
 	if option.LocalFilerSocket == "" {
 		s3ApiServer.client = &http.Client{Transport: &http.Transport{

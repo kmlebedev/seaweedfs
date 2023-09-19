@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3account"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3acl"
 	"github.com/seaweedfs/seaweedfs/weed/security"
 	"github.com/seaweedfs/seaweedfs/weed/util/mem"
 	"golang.org/x/exp/slices"
@@ -616,7 +614,7 @@ func (s3a *S3ApiServer) PutObjectAclHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	errCode = s3acl.AssembleEntryWithAcp(objectEntry, ownerId, grants)
+	errCode = AssembleEntryWithAcp(objectEntry, ownerId, grants)
 	if errCode != s3err.ErrNone {
 		return
 	}

@@ -19,7 +19,8 @@
         "Read",
         "List",
         "Tagging",
-        "Write"
+        "Write",
+        "WriteAcp"
       ]
     },
     {
@@ -39,7 +40,8 @@
         "Read",
         "List",
         "Tagging",
-        "Write"
+        "Write",
+        "WriteAcp"
       ]
     },
     {
@@ -55,7 +57,8 @@
         "Read",
         "List",
         "Tagging",
-        "Write"
+        "Write",
+        "WriteAcp"
       ]
     },
     {
@@ -100,6 +103,13 @@
         "Tagging",
         "Write"
       ]
+    }
+  ],
+  "accounts": [
+    {
+      "id": "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+      "name": "john.doe",
+      "email_address": "john.doe@example.com"
     }
   ]
 }

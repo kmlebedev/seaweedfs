@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3account"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3acl"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3bucket"
 	"github.com/seaweedfs/seaweedfs/weed/util"
 	"math"
@@ -133,9 +131,9 @@ func (s3a *S3ApiServer) PutBucketHandler(w http.ResponseWriter, r *http.Request)
 	}
 	objectOwnership := r.Header.Get("X-Amz-Object-Ownership")
 	requestDisplayName := r.Header.Get(s3_constants.AmzIdentityId)
-	requestAccountId := s3acl.GetAccountId(r)
+	requestAccountId := GetAccountId(r)
 	acp := s3a.bacp.GetAccessControlPolicy(bucket)
-	grants, errCode := s3acl.ExtractBucketAcl(r, s3a.accountManager, objectOwnership, requestAccountId, requestAccountId, true)
+	grants, errCode := ExtractBucketAcl(r, s3a.iam, objectOwnership, requestAccountId, requestAccountId, true)
 	if errCode != s3err.ErrNone {
 		s3err.WriteErrorResponse(w, r, errCode)
 		return
@@ -156,7 +154,7 @@ func (s3a *S3ApiServer) PutBucketHandler(w http.ResponseWriter, r *http.Request)
 	acp.Owner.DisplayName = &requestDisplayName
 	acp.Grants = grants
 	acp.Unlock()
-	glog.V(4).Infof("save owner: %s, bucket: %s, ACL: %+v", requestDisplayName, bucket, *acp)
+	glog.V(4).Infof("save owner: %s, bucket: %s, ACL: %+v", requestDisplayName, bucket, grants)
 	if err := s3a.SaveBucketAccessControlPoliciesConfig(); err != nil {
 		glog.Errorf("Failed save bucket access control policies config to filer: %v", err)
 		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
@@ -282,9 +280,8 @@ func (s3a *S3ApiServer) PutBucketAclHandler(w http.ResponseWriter, r *http.Reque
 
 	var errCode s3err.ErrorCode
 	objectOwnership := r.Header.Get("X-Amz-Object-Ownership")
-	accountId := r.Header.Get(s3_constants.AmzAccountId)
-	requestAccountId := s3acl.GetAccountId(r)
-	grants, errCode := s3acl.ExtractBucketAcl(r, s3a.accountManager, objectOwnership, accountId, requestAccountId, true)
+	requestAccountId := GetAccountId(r)
+	grants, errCode := ExtractBucketAcl(r, s3a.iam, objectOwnership, requestAccountId, requestAccountId, false)
 	if errCode != s3err.ErrNone {
 		s3err.WriteErrorResponse(w, r, errCode)
 		return
@@ -294,6 +291,12 @@ func (s3a *S3ApiServer) PutBucketAclHandler(w http.ResponseWriter, r *http.Reque
 	// Todo maybe need mege grants
 	acp.Grants = grants
 	acp.Unlock()
+	glog.V(4).Infof("save owner: %s, bucket: %s, grants: %+v", requestAccountId, bucket, grants)
+	if err := s3a.SaveBucketAccessControlPoliciesConfig(); err != nil {
+		glog.Errorf("Failed save bucket access control policies config to filer: %v", err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
 	s3err.WriteEmptyResponse(w, r, http.StatusOK)
 }
 
@@ -437,14 +440,14 @@ func (s3a *S3ApiServer) PutBucketOwnershipControls(w http.ResponseWriter, r *htt
 		// must reset bucket acl to default(bucket owner with full control permission) before setting ownership
 		// to `OwnershipBucketOwnerEnforced` (bucket cannot have ACLs set with ObjectOwnership's BucketOwnerEnforced setting)
 		if newObjectOwnership == s3_constants.OwnershipBucketOwnerEnforced {
-			acpGrants := s3acl.GetAcpGrants(nil, bucketEntry.Extended)
+			acpGrants := GetAcpGrants(nil, bucketEntry.Extended)
 			if len(acpGrants) > 1 {
 				s3err.WriteErrorResponse(w, r, s3err.InvalidBucketAclWithObjectOwnership)
 				return
 			} else if len(acpGrants) == 1 {
-				bucketOwner := s3acl.GetAcpOwner(bucketEntry.Extended, s3account.AccountAdmin.Id)
-				expectGrant := s3acl.GrantWithFullControl(bucketOwner)
-				if !s3acl.GrantEquals(acpGrants[0], expectGrant) {
+				bucketOwner := GetAcpOwner(bucketEntry.Extended, AccountAdmin.Id)
+				expectGrant := GrantWithFullControl(bucketOwner)
+				if !GrantEquals(acpGrants[0], expectGrant) {
 					s3err.WriteErrorResponse(w, r, s3err.InvalidBucketAclWithObjectOwnership)
 					return
 				}

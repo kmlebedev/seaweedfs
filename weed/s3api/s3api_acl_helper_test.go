@@ -1,4 +1,4 @@
-package s3acl
+package s3api
 
 import (
 	"bytes"
@@ -6,28 +6,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
-	"github.com/seaweedfs/seaweedfs/weed/s3api/s3account"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 	"io"
 	"net/http"
 	"testing"
-)
-
-var (
-	accountManager = &s3account.AccountManager{
-		IdNameMapping: map[string]string{
-			s3account.AccountAdmin.Id:     s3account.AccountAdmin.Name,
-			s3account.AccountAnonymous.Id: s3account.AccountAnonymous.Name,
-			"accountA":                    "accountA",
-			"accountB":                    "accountB",
-		},
-		EmailIdMapping: map[string]string{
-			s3account.AccountAdmin.EmailAddress:     s3account.AccountAdmin.Id,
-			s3account.AccountAnonymous.EmailAddress: s3account.AccountAnonymous.Id,
-			"accountA@example.com":                  "accountA",
-			"accountBexample.com":                   "accountB",
-		},
-	}
 )
 
 func TestGetAccountId(t *testing.T) {
@@ -36,22 +18,22 @@ func TestGetAccountId(t *testing.T) {
 	}
 	//case1
 	//accountId: "admin"
-	req.Header.Set(s3_constants.AmzAccountId, s3account.AccountAdmin.Id)
-	if GetAccountId(req) != s3account.AccountAdmin.Id {
+	req.Header.Set(s3_constants.AmzAccountId, AccountAdmin.Id)
+	if GetAccountId(req) != AccountAdmin.Id {
 		t.Fatal("expect accountId: admin")
 	}
 
 	//case2
 	//accountId: "anoymous"
-	req.Header.Set(s3_constants.AmzAccountId, s3account.AccountAnonymous.Id)
-	if GetAccountId(req) != s3account.AccountAnonymous.Id {
+	req.Header.Set(s3_constants.AmzAccountId, AccountAnonymous.Id)
+	if GetAccountId(req) != AccountAnonymous.Id {
 		t.Fatal("expect accountId: anonymous")
 	}
 
 	//case3
 	//accountId is nil => "anonymous"
 	req.Header.Del(s3_constants.AmzAccountId)
-	if GetAccountId(req) != s3account.AccountAnonymous.Id {
+	if GetAccountId(req) != AccountAnonymous.Id {
 		t.Fatal("expect accountId: anonymous")
 	}
 }
@@ -71,7 +53,7 @@ func grantsEquals(a, b []*s3.Grant) bool {
 func TestDetermineReqGrants(t *testing.T) {
 	{
 		//case1: request account is anonymous
-		accountId := s3account.AccountAnonymous.Id
+		accountId := AccountAnonymous.Id
 		reqPermission := s3_constants.PermissionRead
 
 		resultGrants := DetermineRequiredGrants(accountId, reqPermission)
@@ -176,7 +158,7 @@ func TestAssembleEntryWithAcp(t *testing.T) {
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 				URI:  &s3_constants.GranteeGroupAllUsers,
 			},
 		},
@@ -249,13 +231,13 @@ func TestGrantEquals(t *testing.T) {
 		GrantEquals(&s3.Grant{
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
-				ID:           &s3account.AccountAdmin.Id,
-				EmailAddress: &s3account.AccountAdmin.EmailAddress,
+				ID:           &AccountAdmin.Id,
+				EmailAddress: &AccountAdmin.EmailAddress,
 			},
 		}, &s3.Grant{
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
-				ID: &s3account.AccountAdmin.Id,
+				ID: &AccountAdmin.Id,
 			},
 		}): true,
 
@@ -303,13 +285,13 @@ func TestGrantEquals(t *testing.T) {
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 			},
 		}, &s3.Grant{
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 			},
 		}): true,
 
@@ -317,14 +299,14 @@ func TestGrantEquals(t *testing.T) {
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 				URI:  &s3_constants.GranteeGroupAllUsers,
 			},
 		}, &s3.Grant{
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 			},
 		}): false,
 
@@ -332,7 +314,7 @@ func TestGrantEquals(t *testing.T) {
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 				URI:  &s3_constants.GranteeGroupAllUsers,
 			},
 		}, &s3.Grant{
@@ -372,7 +354,7 @@ func TestSetAcpGrantsHeader(t *testing.T) {
 			Permission: &s3_constants.PermissionRead,
 			Grantee: &s3.Grantee{
 				Type: &s3_constants.GrantTypeGroup,
-				ID:   &s3account.AccountAdmin.Id,
+				ID:   &AccountAdmin.Id,
 				URI:  &s3_constants.GranteeGroupAllUsers,
 			},
 		},
@@ -1406,7 +1388,7 @@ func TestBucketObjectAcl(t *testing.T) {
 	</AccessControlPolicy>
 	`)))
 		requestAccountId := "accountA"
-		_, errCode := ExtractBucketAcl(req, accountManager, s3_constants.OwnershipObjectWriter, accountAdminId, requestAccountId, false)
+		_, errCode := ExtractBucketAcl(req, iam, s3_constants.OwnershipObjectWriter, accountAdminId, requestAccountId, false)
 		testCases = append(testCases, &Case{
 			id:            "Only one of requestBody, cannedAcl, customAcl is allowed",
 			resultErrCode: errCode, expectErrCode: s3err.ErrUnexpectedContent,
