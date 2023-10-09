@@ -287,6 +287,7 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 		}
 		for _, deleteResult := range deleteResults {
 			if deleteResult.Status == http.StatusAccepted && deleteResult.Size > 0 {
+				fmt.Fprintf(writer, "delete result hasChanges: %+v\n", deleteResult)
 				hasChanges = true
 				return
 			}
