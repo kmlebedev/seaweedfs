@@ -87,6 +87,12 @@ func (vs *VolumeServer) BatchDelete(ctx context.Context, req *volume_server_pb.B
 					Status: http.StatusInternalServerError,
 					Error:  err.Error()},
 				)
+			} else if size == 0 {
+				resp.Results = append(resp.Results, &volume_server_pb.DeleteResult{
+					FileId: fid,
+					Status: http.StatusNotModified,
+					Size:   0},
+				)
 			} else {
 				resp.Results = append(resp.Results, &volume_server_pb.DeleteResult{
 					FileId: fid,
