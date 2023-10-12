@@ -155,6 +155,9 @@ func (c *commandVolumeCheckDisk) Do(args []string, commandEnv *CommandEnv, write
 			if !*slowMode && c.shouldSkipVolume(a, b, pulseTimeAtSecond, *syncDeletions, *verbose) {
 				continue
 			}
+			if *verbose {
+				fmt.Fprintf(c.writer, "Do sync volume %d on fileCount %d =! %d) or deleted %d != %d\n", a.info.Id, a.info.FileCount, b.info.FileCount, a.info.DeleteCount, b.info.DeleteCount)
+			}
 			if err := c.syncTwoReplicas(a, b, *applyChanges, *syncDeletions, *nonRepairThreshold, *verbose); err != nil {
 				fmt.Fprintf(writer, "sync volume %d on %s and %s: %v\n", a.info.Id, a.location.dataNode.Id, b.location.dataNode.Id, err)
 			}
@@ -211,7 +214,9 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 	minuend.DescendingVisit(func(minuendValue needle_map.NeedleValue) error {
 		counter++
 		if subtrahendValue, found := subtrahend.Get(minuendValue.Key); !found {
-			if minuendValue.Size.IsDeleted() {
+			if minuendValue.Size.IsDeleted() && !doSyncDeletions {
+				val, _ := minuend.Get(minuendValue.Key)
+				fmt.Fprintf(writer, "skip IsDeleted entry key: %s, values %+v\n", minuendValue.Key.String(), *val)
 				return nil
 			}
 			if doCutoffOfLastNeedle {
@@ -226,7 +231,8 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 			missingNeedles = append(missingNeedles, minuendValue)
 		} else {
 			if minuendValue.Size.IsDeleted() && !subtrahendValue.Size.IsDeleted() {
-				partiallyDeletedNeedles = append(partiallyDeletedNeedles, minuendValue)
+				fmt.Fprintf(writer, "must be deleted needle key: %d, values %+v\n", subtrahendValue.Key, *subtrahendValue)
+				partiallyDeletedNeedles = append(partiallyDeletedNeedles, *subtrahendValue)
 			}
 			if doCutoffOfLastNeedle {
 				doCutoffOfLastNeedle = false
@@ -235,7 +241,7 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 		return nil
 	})
 
-	fmt.Fprintf(writer, "volume %d %s has %d entries, %s missed %d and partially deleted %d entries\n",
+	fmt.Fprintf(writer, "volume %d %s has %d entries, %s missed %d and must be deleted %d entries\n",
 		source.info.Id, source.location.dataNode.Id, counter, target.location.dataNode.Id, len(missingNeedles), len(partiallyDeletedNeedles))
 
 	if counter == 0 || (len(missingNeedles) == 0 && len(partiallyDeletedNeedles) == 0) {
@@ -277,17 +283,18 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 			fidList = append(fidList, needleValue.Key.FileId(source.info.Id))
 			if verbose {
 				fmt.Fprintf(writer, "delete %s %s => %s\n", needleValue.Key.FileId(source.info.Id), source.location.dataNode.Id, target.location.dataNode.Id)
+				fmt.Fprintf(writer, "delete %d %s => %s\n", needleValue.Key, source.location.dataNode.Id, target.location.dataNode.Id)
 			}
 		}
 		deleteResults, deleteErr := operation.DeleteFilesAtOneVolumeServer(
-			pb.NewServerAddressFromDataNode(target.location.dataNode),
+			pb.NewServerAddressFromDataNode(source.location.dataNode),
 			grpcDialOption, fidList, false)
 		if deleteErr != nil {
 			return hasChanges, deleteErr
 		}
 		for _, deleteResult := range deleteResults {
+			fmt.Fprintf(writer, "delete result hasChanges: %+v, size: %d\n", deleteResult, deleteResult.Size)
 			if deleteResult.Status == http.StatusAccepted && deleteResult.Size > 0 {
-				fmt.Fprintf(writer, "delete result hasChanges: %+v\n", deleteResult)
 				hasChanges = true
 				return
 			}
