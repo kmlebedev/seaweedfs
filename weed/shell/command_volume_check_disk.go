@@ -287,7 +287,7 @@ func doVolumeCheckDisk(minuend, subtrahend *needle_map.MemDb, source, target *Vo
 			}
 		}
 		deleteResults, deleteErr := operation.DeleteFilesAtOneVolumeServer(
-			pb.NewServerAddressFromDataNode(source.location.dataNode),
+			pb.NewServerAddressFromDataNode(target.location.dataNode),
 			grpcDialOption, fidList, false)
 		if deleteErr != nil {
 			return hasChanges, deleteErr
