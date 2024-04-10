@@ -482,7 +482,7 @@ func (s3a *S3ApiServer) ensureDirectoryAllEmpty(filerClient filer_pb.SeaweedFile
 			isExhausted = isExhausted || isLast
 			glog.V(4).Infof("    * %s/%s isLast: %t", currentDir, startFrom, isLast)
 			return nil
-		}, startFrom, false, 8)
+		}, startFrom, false, maxObjectListSizeLimit)
 		if !foundEntry {
 			break
 		}
