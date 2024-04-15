@@ -1,0 +1,69 @@
+---
+stages:
+  - build
+
+variables:
+  TAG_OF_GITLAB_RUNNER: inf_hotel_okd
+  CI_PROJECT_DIR: docker
+  DOCKERFILE: Dockerfile.go_build
+
+build:
+  stage: build
+  tags:
+    - ${TAG_OF_GITLAB_RUNNER}
+  image: nexus.stripchat.tech/golang:1.22
+  script:
+    - cd ./weed
+    - GODEBUG=http2client=0 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -ldflags "-s -w -extldflags -static -X github.com/seaweedfs/seaweedfs/weed/util.COMMIT=${CI_COMMIT_SHORT_SHA}"
+    - ASSET_NAME=weed-$(date -u +%Y%m%d-%H%M)-linux-amd64.tar.gz
+    - VERSION=$(./weed version | awk '{print $3}')
+    - tar -czvf $ASSET_NAME weed
+    - curl -s -u admin:${NEXUS_ADMIN_PASS} --upload-file $ASSET_NAME https://nexus.stripchat.tech/repository/storage/seaweedfs/$VERSION/$ASSET_NAME
+    - curl -v -I https://nexus.stripchat.tech/repository/storage/seaweedfs/$VERSION/$ASSET_NAME
+  variables:
+    CI_RELEASE_TAG: ${CI_COMMIT_SHA}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE =~ /(schedule|trigger|web)/'
+      when: never
+    - if: '$CI_COMMIT_BRANCH =~ /release.*/'
+
+build_large_disk:
+  stage: build
+  tags:
+    - ${TAG_OF_GITLAB_RUNNER}
+  image: nexus.stripchat.tech/golang:1.22
+  script:
+    - cd ./weed
+    - GODEBUG=http2client=0 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -tags 5BytesOffset -ldflags "-s -w -extldflags -static -X github.com/seaweedfs/seaweedfs/weed/util.COMMIT=${CI_COMMIT_SHORT_SHA}"
+    - ASSET_NAME=weed-large-disk-$(date -u +%Y%m%d-%H%M)-linux-amd64.tar.gz
+    - VERSION=$(./weed version | awk '{print $3}')
+    - tar -czvf $ASSET_NAME weed
+    - curl -s -u admin:${NEXUS_ADMIN_PASS} --upload-file $ASSET_NAME https://nexus.stripchat.tech/repository/storage/seaweedfs/$VERSION/$ASSET_NAME
+    - curl -v -I https://nexus.stripchat.tech/repository/storage/seaweedfs/$VERSION/$ASSET_NAME
+  variables:
+    CI_RELEASE_TAG: ${CI_COMMIT_SHA}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE =~ /(schedule|trigger|web)/'
+      when: never
+    - if: '$CI_COMMIT_BRANCH =~ /release.*/'
+
+docker:build:public:s3tests:
+  extends: docker:build:public
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $PUBLIC_BUILD == "true"'
+      when: manual
+    - if: '$CI_COMMIT_BRANCH =~ /release.*/'
+      when: manual
+    - when: never
+  allow_failure: true
+  variables:
+    CURRENT_TAG: ${CI_COMMIT_SHORT_SHA}
+    CI_PROJECT_DIR: test/s3/compatibility
+    DOCKERFILE: Dockerfile
+    DOCKER_REGISTRY_IMAGE: s3tests
+    PUBLIC_BUILD_IMAGE: s3tests
+
+include:
+  - project: 'infrastructure/gitlab/templates'
+    ref: master
+    file: 'jobs/docker_build.yml'
