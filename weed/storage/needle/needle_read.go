@@ -110,6 +110,26 @@ func (n *Needle) ParseNeedleHeader(bytes []byte) {
 	n.Cookie = BytesToCookie(bytes[0:CookieSize])
 	n.Id = BytesToNeedleId(bytes[CookieSize : CookieSize+NeedleIdSize])
 	n.Size = BytesToSize(bytes[CookieSize+NeedleIdSize : NeedleHeaderSize])
+	n.DataSize = BytesToUSize(bytes[NeedleHeaderSize : NeedleHeaderSize+DataSizeSize])
+}
+
+func (n *Needle) ParseNeedleFlags(r backend.BackendStorageFile, offset int64) error {
+	bytes := make([]byte, FlagsSize)
+	if _, err := r.ReadAt(bytes, offset+NeedleHeaderSize+DataSizeSize+int64(n.DataSize)); err != nil {
+		return err
+	}
+	n.Flags = bytes[0]
+	return nil
+}
+
+func (n *Needle) ParseNeedleAppendAtNs(r backend.BackendStorageFile, offset int64) error {
+	bytes := make([]byte, TimestampSize)
+	if _, err := r.ReadAt(bytes, offset+NeedleHeaderSize+int64(n.Size)+NeedleChecksumSize); err != nil {
+		return err
+	}
+	n.AppendAtNs = util.BytesToUint64(bytes)
+
+	return nil
 }
 
 func (n *Needle) readNeedleDataVersion2(bytes []byte) (err error) {
@@ -190,7 +210,7 @@ func (n *Needle) readNeedleDataVersion2NonData(bytes []byte) (index int, err err
 func ReadNeedleHeader(r backend.BackendStorageFile, version Version, offset int64) (n *Needle, bytes []byte, bodyLength int64, err error) {
 	n = new(Needle)
 	if version == Version1 || version == Version2 || version == Version3 {
-		bytes = make([]byte, NeedleHeaderSize)
+		bytes = make([]byte, NeedleHeaderSize+DataSizeSize)
 
 		var count int
 		count, err = r.ReadAt(bytes, offset)

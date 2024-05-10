@@ -99,29 +99,32 @@ func verifyNeedleIntegrity(datFile backend.BackendStorageFile, v needle.Version,
 	if n.Size != size {
 		return 0, ErrorSizeMismatch
 	}
+	glog.V(4).Infof("Parseed entry %s size %d needle header %+v", datFile.Name(), size, n)
 	if v == needle.Version3 {
-		bytes := make([]byte, TimestampSize)
-		_, err = datFile.ReadAt(bytes, offset+NeedleHeaderSize+int64(size)+needle.NeedleChecksumSize)
-		if err == io.EOF {
+		if err = n.ParseNeedleAppendAtNs(datFile, offset); err == io.EOF {
 			return 0, err
-		}
-		if err != nil {
+		} else if err != nil {
 			return 0, fmt.Errorf("verifyNeedleIntegrity check %s entry offset %d size %d: %v", datFile.Name(), offset, size, err)
 		}
-		n.AppendAtNs = util.BytesToUint64(bytes)
-		if n.HasTtl() {
-			return n.AppendAtNs, nil
-		}
+		glog.V(4).Infof("Parseed needle appendAtNs %d", n.AppendAtNs)
 		fileTailOffset := offset + needle.GetActualSize(size, v)
 		fileSize, _, err := datFile.GetStat()
+		glog.V(4).Infof("Parseed needle fileSize: %d and fileTailOffset  %d", fileSize, fileTailOffset)
 		if err != nil {
 			return 0, fmt.Errorf("stat file %s: %v", datFile.Name(), err)
 		}
 		if fileSize == fileTailOffset {
 			return n.AppendAtNs, nil
 		}
+		if err = n.ParseNeedleFlags(datFile, offset); err != nil {
+			return 0, fmt.Errorf("verifyNeedleIntegrity parse needle flags %s entry offset %d size %d: %v", datFile.Name(), offset, size, err)
+		}
+		glog.V(4).Infof("Parseed needle flags %x", n.Flags)
+		if n.HasTtl() {
+			return n.AppendAtNs, nil
+		}
 		if fileSize > fileTailOffset {
-			glog.Warningf("data file %s actual %d bytes expected %d bytes!", datFile.Name(), fileSize, fileTailOffset)
+			glog.Warningf("data file %s actual %d bytes expected %d bytes!, ttl %s", datFile.Name(), fileSize, fileTailOffset)
 			return n.AppendAtNs, fmt.Errorf("data file %s actual %d bytes expected %d bytes", datFile.Name(), fileSize, fileTailOffset)
 		}
 		glog.Warningf("data file %s has %d bytes, less than expected %d bytes!", datFile.Name(), fileSize, fileTailOffset)
