@@ -121,6 +121,10 @@ type GetBucketAccessControlPolicyResponse struct {
 	GetBucketAccessControlPolicyResponse *AccessControlPolicy `xml:"GetBucketAccessControlPolicyResponse"`
 }
 
+// Grantee ...
+type Grantee struct {
+}
+
 // User ...
 type User struct {
 	*Grantee

@@ -12,7 +12,7 @@ func TestCopyObjectResponse(t *testing.T) {
 
 	response := CopyObjectResult{
 		ETag:         "12345678",
-		LastModified: time.Now(),
+		LastModified: time.Now().String(),
 	}
 
 	println(string(s3err.EncodeXMLResponse(response)))

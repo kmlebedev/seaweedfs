@@ -9,25 +9,25 @@ import (
 func TestListBucketsHandler(t *testing.T) {
 
 	expected := `<?xml version="1.0" encoding="UTF-8"?>
-<ListAllMyBucketsResult><Owner xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ID xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></ID></Owner><Buckets xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name xmlns="http://s3.amazonaws.com/doc/2006-03-01/">test1</Name><CreationDate xmlns="http://s3.amazonaws.com/doc/2006-03-01/">2011-04-09T12:34:49Z</CreationDate></Bucket><Bucket xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name xmlns="http://s3.amazonaws.com/doc/2006-03-01/">test2</Name><CreationDate xmlns="http://s3.amazonaws.com/doc/2006-03-01/">2011-02-09T12:34:49Z</CreationDate></Bucket></Buckets></ListAllMyBucketsResult>`
+<ListAllMyBucketsResult><Owner><ID></ID><DisplayName></DisplayName></Owner><Buckets><Bucket><Name>test1</Name><CreationDate>2011-04-09 12:34:49 +0000 UTC</CreationDate></Bucket><Bucket><Name>test2</Name><CreationDate>2011-02-09 12:34:49 +0000 UTC</CreationDate></Bucket></Buckets></ListAllMyBucketsResult>`
 	var response ListAllMyBucketsResult
 
 	var bucketsList ListAllMyBucketsList
-	bucketsList.Bucket = append(bucketsList.Bucket, ListAllMyBucketsEntry{
+	bucketsList.Bucket = append(bucketsList.Bucket, &ListAllMyBucketsEntry{
 		Name:         "test1",
-		CreationDate: time.Date(2011, 4, 9, 12, 34, 49, 0, time.UTC),
+		CreationDate: time.Date(2011, 4, 9, 12, 34, 49, 0, time.UTC).String(),
 	})
-	bucketsList.Bucket = append(bucketsList.Bucket, ListAllMyBucketsEntry{
+	bucketsList.Bucket = append(bucketsList.Bucket, &ListAllMyBucketsEntry{
 		Name:         "test2",
-		CreationDate: time.Date(2011, 2, 9, 12, 34, 49, 0, time.UTC),
+		CreationDate: time.Date(2011, 2, 9, 12, 34, 49, 0, time.UTC).String(),
 	})
 
 	response = ListAllMyBucketsResult{
-		Owner: CanonicalUser{
+		Owner: &CanonicalUser{
 			ID:          "",
 			DisplayName: "",
 		},
-		Buckets: bucketsList,
+		Buckets: &bucketsList,
 	}
 
 	encoded := string(s3err.EncodeXMLResponse(response))

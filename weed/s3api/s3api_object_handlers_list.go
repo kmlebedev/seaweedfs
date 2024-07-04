@@ -35,8 +35,8 @@ type ListBucketResultV2 struct {
 	MaxKeys               uint16         `xml:"MaxKeys"`
 	Delimiter             string         `xml:"Delimiter,omitempty"`
 	IsTruncated           bool           `xml:"IsTruncated"`
-	Contents              []ListEntry    `xml:"Contents,omitempty"`
-	CommonPrefixes        []PrefixEntry  `xml:"CommonPrefixes,omitempty"`
+	Contents              []*ListEntry   `xml:"Contents,omitempty"`
+	CommonPrefixes        []*PrefixEntry `xml:"CommonPrefixes,omitempty"`
 	ContinuationToken     OptionalString `xml:"ContinuationToken,omitempty"`
 	NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
 	EncodingType          string         `xml:"EncodingType,omitempty"`
@@ -138,8 +138,8 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 		reqDir = fmt.Sprintf("%s%s", bucketPrefix, requestDir)
 	}
 
-	var contents []ListEntry
-	var commonPrefixes []PrefixEntry
+	var contents []*ListEntry
+	var commonPrefixes []*PrefixEntry
 	var doErr error
 	var nextMarker string
 	cursor := &ListingCursor{
@@ -160,7 +160,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 						cursor.maxKeys--
 						// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
 					} else if delimiter == "/" { // A response can contain CommonPrefixes only if you specify a delimiter.
-						commonPrefixes = append(commonPrefixes, PrefixEntry{
+						commonPrefixes = append(commonPrefixes, &PrefixEntry{
 							Prefix: fmt.Sprintf("%s/%s/", dirName, prefixName)[len(bucketPrefix):],
 						})
 						//All of the keys (up to 1,000) rolled up into a common prefix count as a single return when calculating the number of returns.
@@ -190,7 +190,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 							}
 
 							if !delimiterFound {
-								commonPrefixes = append(commonPrefixes, PrefixEntry{
+								commonPrefixes = append(commonPrefixes, &PrefixEntry{
 									Prefix: delimitedPrefix,
 								})
 								cursor.maxKeys--

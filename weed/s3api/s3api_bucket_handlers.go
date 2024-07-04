@@ -59,19 +59,19 @@ func (s3a *S3ApiServer) ListBucketsHandler(w http.ResponseWriter, r *http.Reques
 			if identity != nil && !identity.canDo(s3_constants.ACTION_LIST, entry.Name, "") {
 				continue
 			}
-			listBuckets.Bucket = append(listBuckets.Bucket, ListAllMyBucketsEntry{
+			listBuckets.Bucket = append(listBuckets.Bucket, &ListAllMyBucketsEntry{
 				Name:         entry.Name,
-				CreationDate: time.Unix(entry.Attributes.Crtime, 0).UTC(),
+				CreationDate: time.Unix(entry.Attributes.Crtime, 0).UTC().Format(),
 			})
 		}
 	}
 
 	response = ListAllMyBucketsResult{
-		Owner: CanonicalUser{
+		Owner: &CanonicalUser{
 			ID:          identityId,
 			DisplayName: identityId,
 		},
-		Buckets: listBuckets,
+		Buckets: &listBuckets,
 	}
 
 	writeSuccessResponseXML(w, r, response)
@@ -257,18 +257,13 @@ func (s3a *S3ApiServer) GetBucketAclHandler(w http.ResponseWriter, r *http.Reque
 	amzAccountId := r.Header.Get(s3_constants.AmzAccountId)
 	amzDisplayName := s3a.iam.GetAccountNameById(amzAccountId)
 	response := AccessControlPolicy{
-		Owner: CanonicalUser{
+		Owner: &CanonicalUser{
 			ID:          amzAccountId,
 			DisplayName: amzDisplayName,
 		},
 	}
-	response.AccessControlList.Grant = append(response.AccessControlList.Grant, Grant{
-		Grantee: Grantee{
-			ID:          amzAccountId,
-			DisplayName: amzDisplayName,
-			Type:        "CanonicalUser",
-			XMLXSI:      "CanonicalUser",
-			XMLNS:       "http://www.w3.org/2001/XMLSchema-instance"},
+	response.AccessControlList.Grant = append(response.AccessControlList.Grant, &Grant{
+		Grantee:    &Grantee{},
 		Permission: s3.PermissionFullControl,
 	})
 	writeSuccessResponseXML(w, r, response)

@@ -60,7 +60,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		}
 		writeSuccessResponseXML(w, r, CopyObjectResult{
 			ETag:         fmt.Sprintf("%x", entry.Attributes.Md5),
-			LastModified: time.Now().UTC(),
+			LastModified: time.Now().UTC().String(),
 		})
 		return
 	}
@@ -112,7 +112,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 
 	response := CopyObjectResult{
 		ETag:         etag,
-		LastModified: time.Now().UTC(),
+		LastModified: time.Now().UTC().String(),
 	}
 
 	writeSuccessResponseXML(w, r, response)
