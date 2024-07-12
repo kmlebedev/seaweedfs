@@ -21,55 +21,58 @@ import (
 func (ms *MasterServer) ProcessGrowRequest() {
 	go func() {
 		filter := sync.Map{}
+		ticker := time.NewTicker(13 * time.Second)
+		defer ticker.Stop()
 		for {
-			req, ok := <-ms.volumeGrowthRequestChan
-			if !ok {
-				break
-			}
+			select {
+			case <-ticker.C:
 
-			if !ms.Topo.IsLeader() {
-				//discard buffered requests
-				time.Sleep(time.Second * 1)
-				continue
-			}
-
-			// filter out identical requests being processed
-			found := false
-			filter.Range(func(k, v interface{}) bool {
-				if reflect.DeepEqual(k, req) {
-					found = true
+			case req, ok := <-ms.volumeGrowthRequestChan:
+				if !ok {
+					break
 				}
-				return !found
-			})
-
-			option := req.Option
-			vl := ms.Topo.GetVolumeLayout(option.Collection, option.ReplicaPlacement, option.Ttl, option.DiskType)
-
-			// not atomic but it's okay
-			if !found && vl.ShouldGrowVolumes(option) {
-				filter.Store(req, nil)
-				// we have lock called inside vg
-				go func() {
-					glog.V(1).Infoln("starting automatic volume grow")
-					start := time.Now()
-					newVidLocations, err := ms.vg.AutomaticGrowByType(req.Option, ms.grpcDialOption, ms.Topo, req.Count)
-					glog.V(1).Infoln("finished automatic volume grow, cost ", time.Now().Sub(start))
-					if err == nil {
-						for _, newVidLocation := range newVidLocations {
-							ms.broadcastToClients(&master_pb.KeepConnectedResponse{VolumeLocation: newVidLocation})
-						}
-					} else {
-						glog.V(1).Infof("automatic volume grow failed: %+v", err)
+				if !ms.Topo.IsLeader() {
+					//discard buffered requests
+					time.Sleep(time.Second * 1)
+					continue
+				}
+				// filter out identical requests being processed
+				found := false
+				filter.Range(func(k, v interface{}) bool {
+					if reflect.DeepEqual(k, req) {
+						found = true
 					}
+					return !found
+				})
+
+				option := req.Option
+				vl := ms.Topo.GetVolumeLayout(option.Collection, option.ReplicaPlacement, option.Ttl, option.DiskType)
+
+				// not atomic but it's okay
+				if !found && vl.ShouldGrowVolumes(option) {
+					filter.Store(req, nil)
+					// we have lock called inside vg
+					go func() {
+						glog.V(1).Infoln("starting automatic volume grow")
+						start := time.Now()
+						newVidLocations, err := ms.vg.AutomaticGrowByType(req.Option, ms.grpcDialOption, ms.Topo, req.Count)
+						glog.V(1).Infoln("finished automatic volume grow, cost ", time.Now().Sub(start))
+						if err == nil {
+							for _, newVidLocation := range newVidLocations {
+								ms.broadcastToClients(&master_pb.KeepConnectedResponse{VolumeLocation: newVidLocation})
+							}
+						} else {
+							glog.V(1).Infof("automatic volume grow failed: %+v", err)
+						}
+						vl.DoneGrowRequest()
+
+						filter.Delete(req)
+					}()
+				} else {
+					glog.V(4).Infoln("discard volume grow request")
+					time.Sleep(time.Millisecond * 211)
 					vl.DoneGrowRequest()
-
-					filter.Delete(req)
-				}()
-
-			} else {
-				glog.V(4).Infoln("discard volume grow request")
-				time.Sleep(time.Millisecond * 211)
-				vl.DoneGrowRequest()
+				}
 			}
 		}
 	}()

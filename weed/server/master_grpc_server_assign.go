@@ -90,8 +90,9 @@ func (ms *MasterServer) Assign(ctx context.Context, req *master_pb.AssignRequest
 			}
 			vl.AddGrowRequest()
 			ms.volumeGrowthRequestChan <- &topology.VolumeGrowRequest{
-				Option: option,
-				Count:  int(req.WritableVolumeCount),
+				Option:         option,
+				WritableCount:  int(req.WritableVolumeCount),
+				RequestedCount: int(req.Count),
 			}
 		}
 		if err != nil {
