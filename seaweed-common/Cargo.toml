@@ -17,6 +17,15 @@ description = "Helpers shared by the SeaweedFS Rust volume server and the Rust p
 # what lets a proto gain a field without touching every constructor.
 needless_update = "allow"
 
+[features]
+# Which rustls crypto provider the binary installs as its process-wide
+# default. Exactly one must be on: `crypto-aws-lc` is what the x86_64/arm64
+# builds have always used, `crypto-ring` is for targets aws-lc-rs cannot
+# compile on (see the e2k build, issue #13007).
+default = ["crypto-aws-lc"]
+crypto-aws-lc = ["rustls/aws-lc-rs", "rustls/prefer-post-quantum"]
+crypto-ring = ["rustls/ring"]
+
 [dependencies]
 # The same requirement both consumers already write. Cargo unifies all
 # semver-compatible `rustls = "0.23"` requirements into one crate per binary,
@@ -24,4 +33,14 @@ needless_update = "allow"
 # process-wide static the consuming crate reads. rustls is already in both
 # trees (the volume server directly, seaweed-worker-core through tonic's
 # `tls-aws-lc`), so this adds no crate to either graph.
-rustls = "0.23"
+#
+# `default-features = false` so the provider comes from exactly one of the
+# features above instead of being added by rustls' own default; the remaining
+# default features are listed by hand, `prefer-post-quantum` with them because
+# it rides on `aws_lc_rs` and dropping it would silently change the key
+# exchange of every existing deployment.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "logging",
+] }

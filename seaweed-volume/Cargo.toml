@@ -17,8 +17,42 @@ path = "src/main.rs"
 [features]
 # Default: 5-byte offsets (8TB max volume size), matching production Go builds (-tags 5BytesOffset).
 # Disable with --no-default-features for 4-byte offsets (32GB max volume size).
-default = ["5bytes"]
+#
+# The other four split out the parts that an e2k (Elbrus) build cannot carry,
+# so that the same source builds there — see issue #13007. Enabling them all is
+# today's dependency graph, which is why they are all in `default`: an x86_64
+# or arm64 build resolves, locks and compiles exactly what it did before. The
+# e2k build is `--no-default-features --features 5bytes,crypto-ring`, which
+# needs the module gating of steps 3-5 in that issue before it links.
+default = ["5bytes", "s3-remote", "crypto-aws-lc", "redb-index", "profiling"]
 5bytes = []
+# S3 remote storage and tiering. The AWS SDK is the only reason this tree needs
+# rustc >= 1.91.1, so it has to be droppable to build for older toolchains.
+s3-remote = [
+    "dep:aws-config",
+    "dep:aws-sdk-s3",
+    "dep:aws-credential-types",
+    "dep:aws-types",
+]
+# rustls provider, forwarded to seaweed-common so the process-wide default and
+# the gRPC transport agree on one. Exactly one of the two can be on.
+crypto-aws-lc = [
+    "seaweed-common/crypto-aws-lc",
+    "rustls/aws-lc-rs",
+    "rustls/prefer-post-quantum",
+    "tokio-rustls/aws-lc-rs",
+    "tonic/tls-aws-lc",
+]
+crypto-ring = [
+    "seaweed-common/crypto-ring",
+    "rustls/ring",
+    "tokio-rustls/ring",
+    "tonic/tls-ring",
+]
+# Disk-backed needle map. redb 4.x requires rustc >= 1.90.
+redb-index = ["dep:redb"]
+# /debug/pprof. pprof pulls nix and findshlibs, neither of which knows e2k.
+profiling = ["dep:pprof"]
 
 [lints.clippy]
 # Protobuf message literals keep `..Default::default()` on purpose: it is
@@ -31,15 +65,15 @@ undocumented_unsafe_blocks = "warn"
 # Helpers the Rust plugin workers (seaweed-worker) need as well. A path
 # dependency because the two trees are separate cargo workspaces with no
 # common root manifest.
-seaweed-common = { path = "../seaweed-common" }
+seaweed-common = { path = "../seaweed-common", default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tokio-io-timeout = "1"
 
-# gRPC + protobuf
-tonic = { version = "0.14", features = ["tls-aws-lc"] }
+# gRPC + protobuf. The TLS provider comes from `crypto-aws-lc`/`crypto-ring`.
+tonic = "0.14"
 tonic-prost = "0.14"
 tonic-reflection = "0.14"
 prost = "0.14"
@@ -63,17 +97,26 @@ prometheus = { version = "0.13", default-features = false, features = ["process"
 # JWT
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 
-# TLS
-rustls = "0.23"
-tokio-rustls = "0.26"
+# TLS. default-features = false on both so the provider is whatever the
+# crypto-* feature selected; the rest of rustls' defaults are spelled out.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "tls12",
+    "logging",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "logging",
+    "tls12",
+] }
 rustls-pemfile = "2"
 
 # LevelDB (via RocksDB for better Rust support)
 # Using rusty-leveldb for pure Rust LevelDB
 rusty-leveldb = "3"
 
-# Disk-backed needle map (alternative to in-memory HashMap)
-redb = "4"
+# Disk-backed needle map (alternative to in-memory HashMap). Optional: redb 4.x
+# is the only in-tree user of a rustc newer than 1.87 after the AWS SDK goes.
+redb = { version = "4", optional = true }
 
 # Reed-Solomon erasure coding
 reed-solomon-erasure = "6"
@@ -139,15 +182,17 @@ x509-parser = "0.16"
 sysinfo = "0.31"
 libc = "0.2"
 
-# AWS S3 SDK (for remote storage backends)
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1.125.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
-aws-credential-types = "1"
-aws-types = "1"
+# AWS S3 SDK (for remote storage backends), behind `s3-remote`: it is what pins
+# this tree to rustc >= 1.91.1, newer than the e2k toolchain (ALT rust 1.87).
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+aws-sdk-s3 = { version = "1.125.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"], optional = true }
+aws-credential-types = { version = "1", optional = true }
+aws-types = { version = "1", optional = true }
 
-# pprof is Unix-only (requires libc/nix APIs not available on Windows)
+# pprof is Unix-only (requires libc/nix APIs not available on Windows), and
+# behind `profiling` because nix has no e2k definitions.
 [target.'cfg(unix)'.dependencies]
-pprof = { version = "0.15", features = ["prost-codec"] }
+pprof = { version = "0.15", features = ["prost-codec"], optional = true }
 
 # GetDiskFreeSpaceExW for per-path disk capacity on Windows (0.61.2 already
 # in the tree via tempfile/mio, so this unifies rather than adding a version).

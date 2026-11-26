@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::crypto::CryptoProvider;
-use rustls::crypto::aws_lc_rs;
 use rustls::pki_types::UnixTime;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -118,12 +117,12 @@ impl ClientCertVerifier for CommonNameVerifier {
     }
 }
 
-// aws-lc-rs and ring both get linked transitively, so rustls can't auto-select
-// a provider and tonic's client TLS panics on first use. Pin the default to
-// aws-lc-rs, matching the server config. Idempotent. The body lives in
-// seaweed-common so this binary and the Rust plugin workers cannot end up
-// installing different providers; re-exported here so callers keep their
-// import path.
+// More than one provider gets linked (aws-lc-rs by default, ring through
+// reqwest), so rustls can't auto-select one and tonic's client TLS panics on
+// first use until we pin it to the one this build was configured for.
+// Idempotent. The body lives in seaweed-common so this binary and the Rust
+// plugin workers cannot end up installing different providers; re-exported here
+// so callers keep their import path.
 pub use seaweed_common::tls::install_default_crypto_provider;
 
 pub fn build_rustls_server_config(
@@ -242,7 +241,7 @@ fn read_root_store(ca_path: &str) -> Result<RootCertStore, TlsPolicyError> {
 }
 
 fn build_crypto_provider(policy: &TlsPolicy) -> Result<Arc<CryptoProvider>, TlsPolicyError> {
-    let mut provider = aws_lc_rs::default_provider();
+    let mut provider = seaweed_common::tls::default_provider();
     let cipher_suites = parse_cipher_suites(&provider.cipher_suites, &policy.cipher_suites)?;
     if !cipher_suites.is_empty() {
         provider.cipher_suites = cipher_suites;
@@ -421,7 +420,7 @@ fn go_tls_version_for_supported(version: &SupportedProtocolVersion) -> GoTlsVers
 #[cfg(test)]
 mod tests {
     use super::{TlsPolicy, build_supported_versions, common_name_is_allowed, parse_cipher_suites};
-    use rustls::crypto::aws_lc_rs;
+    use seaweed_common::tls::default_provider;
     use std::collections::HashSet;
 
     #[test]
@@ -458,7 +457,7 @@ mod tests {
     #[test]
     fn test_parse_cipher_suites_accepts_go_names() {
         let cipher_suites = parse_cipher_suites(
-            &aws_lc_rs::default_provider().cipher_suites,
+            &default_provider().cipher_suites,
             "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_AES_128_GCM_SHA256",
         )
         .unwrap();
